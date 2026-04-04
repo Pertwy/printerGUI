@@ -3,7 +3,7 @@ import './App.css'
 function App() {
 
   function handleClick() {
-    fetch('/print', {
+    fetch('localhost:3000/print', {
       method: 'POST'
     }).then(response => response.json())
     .then(data => {

@@ -18,6 +18,6 @@ app.post('/print', (req, res) => {
 
 });
 
-app.listen(5173, () => {
-  console.log('Server running on port 5173');
+app.listen(3000, () => {
+  console.log('Server running on port 3000');
 });
