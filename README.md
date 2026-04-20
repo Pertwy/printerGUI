@@ -26,6 +26,31 @@ Optional systemd: **`scripts/print-server.service.example`** and **`scripts/vite
 - **`VITE_*`** values come from `.env` when Vite starts; restart dev after changing them.
 - Add those browser origins to **S3 CORS**, e.g. `http://192.168.1.50:5173` and `http://raspberrypi.local:5173`.
 
+#### Boot on power-on (systemd)
+
+1. Install dependencies once on the Pi: **`npm ci`** in the project folder (and ensure **`.env`** has your `VITE_*` values).
+2. Copy the examples (edit **`WorkingDirectory`** and **`User`** if your user is not `pi`):
+   - `sudo cp scripts/print-server.service.example /etc/systemd/system/print-server.service`
+   - `sudo cp scripts/vite-ui.service.example /etc/systemd/system/vite-ui.service`
+3. If **`npm`** is not at `/usr/bin/npm` (e.g. you use **nvm**), change **`ExecStart`** in both units to the full path from **`which npm`** on the Pi, or use:
+   `ExecStart=/bin/bash -lc 'cd /home/pi/printerGUI && npm run server'` (same idea for `npm run dev`).
+4. Enable and start:
+   - `sudo systemctl daemon-reload`
+   - `sudo systemctl enable --now print-server.service`
+   - `sudo systemctl enable --now vite-ui.service`
+5. Check: **`systemctl status print-server`** and **`systemctl status vite-ui`**. The UI should be at **`http://localhost:5173`** on the Pi and **`http://<pi-ip>:5173`** on your LAN.
+
+#### Fullscreen browser on the Pi (kiosk)
+
+Use **Raspberry Pi OS with desktop** (or any desktop where you auto-login). After graphical login, autostart Chromium:
+
+1. Copy **`scripts/kiosk-autostart.desktop.example`** to **`~/.config/autostart/printer-kiosk.desktop`** (see comments inside that file).
+2. Adjust **`Exec`**: use **`chromium`** or **`chromium-browser`** depending on what is installed (`which chromium`).
+3. The **`sleep 10`** gives Vite time to start after boot; increase if the page loads blank.
+4. Reboot or log out and back in. Exit kiosk temporarily with **Alt+F4** or **Ctrl+W** depending on the browser.
+
+If the Pi has **no monitor** (headless), fullscreen on the device itself does not apply; open **`http://<pi-ip>:5173`** from another computer or phone instead.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
