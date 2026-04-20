@@ -1,23 +1,85 @@
-const express = require('express');
-const SerialPort = require('serialport');
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { createRequire } from "module";
+import express from "express";
+import cors from "cors";
+
+const require = createRequire(import.meta.url);
+const escpos = require("escpos");
+escpos.File = require("escpos-file");
 
 const app = express();
+app.use(cors());
+app.use(express.json({ limit: "15mb" }));
 
-// open serial connection
-const port = new SerialPort('/dev/serial0', {
-  baudRate: 9600
+const device = new escpos.File("/dev/usb/lp0");
+const printer = new escpos.Printer(device);
+
+app.get("/test", (req, res) => {
+  device.open(() => {
+    printer.text("Hello from /dev/usb/lp0").cut().close();
+  });
+  res.send("Test print sent");
 });
 
-app.post('/print', (req, res) => {
-  port.write("Hello World\n", (err) => {
-    if (err) {
-      return res.status(500).send('Error');
-    }
-    res.send('Printed');
-  });
+app.post("/printimage", async (req, res) => {
+  console.log("Print request received");
 
+  let processedPath;
+
+  try {
+    const imageBase64 = req.body?.imageBase64;
+    if (typeof imageBase64 !== "string" || !imageBase64.trim()) {
+      return res.status(400).send("Missing imageBase64");
+    }
+
+    let inputBuffer;
+    try {
+      inputBuffer = Buffer.from(imageBase64, "base64");
+    } catch {
+      return res.status(400).send("Invalid base64");
+    }
+    if (!inputBuffer.length) {
+      return res.status(400).send("Empty image");
+    }
+
+    processedPath = path.join(os.tmpdir(), `print-processed-${Date.now()}.jpg`);
+    await fs.promises.writeFile(processedPath, inputBuffer);
+
+    await new Promise((resolve, reject) => {
+      escpos.Image.load(processedPath, function (image) {
+        if (!image) {
+          return reject(new Error("escpos.Image.load failed"));
+        }
+        device.open(() => {
+          try {
+            printer
+              .align("ct")
+              .raster(image)
+              .feed(2)
+              .cut()
+              .close();
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    });
+
+    console.log("Image printed");
+    res.send("Printed");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error printing image");
+  } finally {
+    if (processedPath) {
+      fs.promises.unlink(processedPath).catch(() => {});
+    }
+  }
 });
 
 app.listen(3000, () => {
-  console.log('Server running on port 3000');
+  console.log("Server running on http://localhost:3000");
 });

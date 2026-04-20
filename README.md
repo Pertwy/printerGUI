@@ -1,5 +1,17 @@
 # React + TypeScript + Vite
 
+## S3 + AWS env setup
+
+1. Copy `.env.example` to `.env`.
+2. Replace dummy values with your real AWS values (all use `VITE_` prefixes).
+3. Start frontend with `npm run dev` and backend printing server with `npm run server`.
+
+Notes:
+
+- S3 access is now handled in the React app (browser).
+- The Node server is only used for `/printimage` and `/test`.
+- Ensure your S3 bucket CORS allows `GET`, `PUT`, and `HEAD` from your app origin (for local dev: `http://localhost:5173`).
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

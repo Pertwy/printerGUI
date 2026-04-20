@@ -1,33 +1,34 @@
-import './App.css'
+import "./App.css";
+import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import PrintPage from "./pages/PrintPage";
+import UploadPage from "./pages/UploadPage";
 
-function App() {
-
-  function handleClick() {
-    fetch('localhost:3000/print', {
-      method: 'POST'
-    }).then(response => response.json())
-    .then(data => {
-      console.log(data)
-    })
-    .catch(error => {
-      console.error('Error:', error)
-    });
-  }
-
+export default function App() {
   return (
-    <>
-      <section id="center">
-        <button
-          className="counter"
-          onClick={handleClick}
+    <BrowserRouter>
+      <nav className="app-nav" aria-label="Main">
+        <NavLink
+          to="/"
+          end
+          className={({ isActive }) =>
+            "app-nav-link" + (isActive ? " app-nav-link--active" : "")
+          }
         >
-          Print From Server
-        </button>
-      </section>
-
-
-    </>
-  )
+          Print
+        </NavLink>
+        <NavLink
+          to="/upload"
+          className={({ isActive }) =>
+            "app-nav-link" + (isActive ? " app-nav-link--active" : "")
+          }
+        >
+          Upload
+        </NavLink>
+      </nav>
+      <Routes>
+        <Route path="/" element={<PrintPage />} />
+        <Route path="/upload" element={<UploadPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
-
-export default App
