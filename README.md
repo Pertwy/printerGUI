@@ -12,6 +12,15 @@ Notes:
 - The Node server is only used for `/printimage` and `/test`.
 - Ensure your S3 bucket CORS allows `GET`, `PUT`, and `HEAD` from your app origin (for local dev: `http://localhost:5173`).
 
+### Raspberry Pi (printer server + Vite separately)
+
+Vite is configured with `host: true` so you can use the UI from **`http://<pi-ip>:5173`** on your LAN.
+
+- Start both processes: **`./scripts/start-pi.sh`** or **`npm run start:pi`** (runs `npm run server`, then **`npm run dev -- --host`**).
+- Optional boot service: adapt **`scripts/printer-gui.service.example`** into `/etc/systemd/system/printer-gui.service`.
+- **`VITE_*`** values come from `.env` when Vite starts; restart dev after changing them.
+- Add those browser origins to **S3 CORS**, e.g. `http://192.168.1.50:5173` and `http://raspberrypi.local:5173`.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

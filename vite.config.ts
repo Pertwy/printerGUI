@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: true,
     proxy: {
       '/printimage': 'http://localhost:3000',
       '/test': 'http://localhost:3000',

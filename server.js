@@ -4,6 +4,7 @@ import os from "os";
 import { createRequire } from "module";
 import express from "express";
 import cors from "cors";
+import { Jimp } from "jimp";
 
 const require = createRequire(import.meta.url);
 const escpos = require("escpos");
@@ -13,9 +14,13 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
+// 🖨️ Printer setup
 const device = new escpos.File("/dev/usb/lp0");
 const printer = new escpos.Printer(device);
 
+// ------------------------
+// 🧪 TEST
+// ------------------------
 app.get("/test", (req, res) => {
   device.open(() => {
     printer.text("Hello from /dev/usb/lp0").cut().close();
@@ -23,6 +28,9 @@ app.get("/test", (req, res) => {
   res.send("Test print sent");
 });
 
+// ------------------------
+// 🖼️ PRINT IMAGE
+// ------------------------
 app.post("/printimage", async (req, res) => {
   console.log("Print request received");
 
@@ -44,8 +52,15 @@ app.post("/printimage", async (req, res) => {
       return res.status(400).send("Empty image");
     }
 
+    const jimpImage = await Jimp.read(inputBuffer);
+
+    // Rotate landscape images
+    if (jimpImage.bitmap.width > jimpImage.bitmap.height) {
+      jimpImage.rotate(90);
+    }
+
     processedPath = path.join(os.tmpdir(), `print-processed-${Date.now()}.jpg`);
-    await fs.promises.writeFile(processedPath, inputBuffer);
+    await jimpImage.write(processedPath);
 
     await new Promise((resolve, reject) => {
       escpos.Image.load(processedPath, function (image) {
@@ -54,12 +69,7 @@ app.post("/printimage", async (req, res) => {
         }
         device.open(() => {
           try {
-            printer
-              .align("ct")
-              .raster(image)
-              .feed(2)
-              .cut()
-              .close();
+            printer.align("ct").raster(image).feed(2).cut().close();
             resolve();
           } catch (e) {
             reject(e);
@@ -80,6 +90,8 @@ app.post("/printimage", async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
+// Printer API only — run the React app separately (e.g. `npm run dev` with Vite proxy).
+
+app.listen(3000, "0.0.0.0", () => {
+  console.log("Print server listening on http://0.0.0.0:3000");
 });

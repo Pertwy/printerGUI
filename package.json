@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start:pi": "bash scripts/start-pi.sh",
     "server": "node server.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
@@ -22,7 +23,8 @@
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.1",
     "serialport": "^13.0.0",
-    "tslib": "^2.8.1"
+    "tslib": "^2.8.1",
+    "write-file-queue": "^0.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
