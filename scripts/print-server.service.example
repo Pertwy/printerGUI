@@ -1,0 +1,17 @@
+# Printer API — copy to /etc/systemd/system/print-server.service, edit paths, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now print-server.service
+
+[Unit]
+Description=Thermal printer API (Express)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/printerGUI
+User=pi
+ExecStart=/usr/bin/npm run server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

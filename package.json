@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "start:pi": "bash scripts/start-pi.sh",
     "server": "node server.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

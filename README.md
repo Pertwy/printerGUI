@@ -14,10 +14,15 @@ Notes:
 
 ### Raspberry Pi (printer server + Vite separately)
 
-Vite is configured with `host: true` so you can use the UI from **`http://<pi-ip>:5173`** on your LAN.
+Run **two terminals** (or two systemd units):
 
-- Start both processes: **`./scripts/start-pi.sh`** or **`npm run start:pi`** (runs `npm run server`, then **`npm run dev -- --host`**).
-- Optional boot service: adapt **`scripts/printer-gui.service.example`** into `/etc/systemd/system/printer-gui.service`.
+1. Print API: **`./scripts/start-print-server.sh`** or **`npm run server`**
+2. UI: **`./scripts/start-ui.sh`** or **`npm run dev -- --host`**
+
+Vite proxies `/printimage` and `/test` to **`http://localhost:3000`**. Leave **`VITE_API_BASE` empty** in `.env` so printing uses that proxy (same origin as the UI). The print server listens only on **loopback** so phones use **`http://<pi-ip>:5173`**, not port 3000.
+
+Optional systemd: **`scripts/print-server.service.example`** and **`scripts/vite-ui.service.example`** (two separate services).
+
 - **`VITE_*`** values come from `.env` when Vite starts; restart dev after changing them.
 - Add those browser origins to **S3 CORS**, e.g. `http://192.168.1.50:5173` and `http://raspberrypi.local:5173`.
 

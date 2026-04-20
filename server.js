@@ -90,8 +90,9 @@ app.post("/printimage", async (req, res) => {
   }
 });
 
-// Printer API only — run the React app separately (e.g. `npm run dev` with Vite proxy).
+// Printer API only — bind to loopback so the browser talks to `/printimage` via the Vite dev proxy,
+// not directly to port 3000 (avoids extra CORS issues on LAN devices).
 
-app.listen(3000, "0.0.0.0", () => {
-  console.log("Print server listening on http://0.0.0.0:3000");
+app.listen(3000, "localhost", () => {
+  console.log("Print server running on http://localhost:3000");
 });
