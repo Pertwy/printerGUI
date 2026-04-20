@@ -67,10 +67,15 @@ function getClient(region: string): S3Client {
   return cachedClient;
 }
 
-async function listImageKeys(prefix: string): Promise<string[]> {
+type ListedImage = {
+  key: string;
+  lastModified: number;
+};
+
+async function listImages(prefix: string): Promise<ListedImage[]> {
   const { region, bucket } = getConfig();
   const client = getClient(region);
-  const keys: string[] = [];
+  const items: ListedImage[] = [];
 
   let token: string | undefined;
   do {
@@ -84,13 +89,18 @@ async function listImageKeys(prefix: string): Promise<string[]> {
     );
     for (const obj of page.Contents ?? []) {
       if (obj.Key && !obj.Key.endsWith("/") && IMAGE_EXT.test(obj.Key)) {
-        keys.push(obj.Key);
+        items.push({
+          key: obj.Key,
+          lastModified: obj.LastModified
+            ? obj.LastModified.getTime()
+            : 0,
+        });
       }
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined;
-  } while (token && keys.length < 2000);
+  } while (token && items.length < 2000);
 
-  return keys;
+  return items;
 }
 
 export type S3ImageChoice = {
@@ -104,8 +114,8 @@ export async function getAllS3ImageChoices(): Promise<{
 }> {
   const { listPrefix, uploadPrefix } = getConfig();
   const primaryPrefix = uploadPrefix || listPrefix;
-  const keys = await listImageKeys(primaryPrefix);
-  if (!keys.length) {
+  const listed = await listImages(primaryPrefix);
+  if (!listed.length) {
     return {
       choices: [],
       notice: primaryPrefix
@@ -114,17 +124,20 @@ export async function getAllS3ImageChoices(): Promise<{
     };
   }
 
+  // Most recently uploaded first.
+  listed.sort((a, b) => b.lastModified - a.lastModified);
+
   const choices = await Promise.all(
-    keys.map(async (key) => ({
-      key,
-      url: await getSignedImageUrl(key),
+    listed.map(async (item) => ({
+      key: item.key,
+      url: await getSignedImageUrl(item.key),
     }))
   );
 
   return {
     choices,
     notice: primaryPrefix
-      ? `Showing ${keys.length} image(s) from "${primaryPrefix}".`
+      ? `Showing ${listed.length} image(s) from "${primaryPrefix}".`
       : undefined,
   };
 }

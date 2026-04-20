@@ -74,6 +74,16 @@ export default function PrintPage() {
       <form onSubmit={handleSubmit}>
         <fieldset className="print-image-picker">
           <legend className="print-image-legend">Choose image to print</legend>
+          <div className="print-image-actions">
+            <button
+              type="button"
+              className="print-image-refresh"
+              onClick={() => void refreshChoices()}
+              disabled={loading || isPrinting}
+            >
+              Refresh images
+            </button>
+          </div>
           {loadError ? (
             <p className="print-image-error" role="alert">
               {loadError}
