@@ -45,7 +45,11 @@ export default function PrintPage() {
 
     setIsPrinting(true);
     try {
-      const imageRes = await fetch(selected.url);
+      const imageRes = await fetch(apiUrl("/fetch-for-print"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: selected.url }),
+      });
       if (!imageRes.ok) throw new Error(`Image HTTP ${imageRes.status}`);
       const blob = await imageRes.blob();
       const imageBase64 = await blobToBase64(blob);

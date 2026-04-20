@@ -9,7 +9,7 @@
 Notes:
 
 - S3 access is now handled in the React app (browser).
-- The Node server is only used for `/printimage` and `/test`.
+- The Node server is only used for `/printimage`, `/test`, and `/fetch-for-print` (loads a presigned S3 image for printing so the browser does not need S3 CORS for that `fetch`).
 - Ensure your S3 bucket CORS allows `GET`, `PUT`, and `HEAD` from your app origin (for local dev: `http://localhost:5173`).
 
 ### Raspberry Pi (printer server + Vite separately)

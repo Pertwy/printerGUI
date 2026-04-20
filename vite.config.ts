@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
+      '/fetch-for-print': 'http://localhost:3000',
       '/printimage': 'http://localhost:3000',
       '/test': 'http://localhost:3000',
     },

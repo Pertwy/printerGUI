@@ -31,6 +31,49 @@ app.get("/test", (req, res) => {
 // ------------------------
 // 🖼️ PRINT IMAGE
 // ------------------------
+/**
+ * Fetch image bytes from a presigned S3 URL server-side so the browser does not need
+ * S3 CORS for GET (img tags still work without CORS; fetch() does not).
+ */
+app.post("/fetch-for-print", async (req, res) => {
+  const raw = req.body?.url;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return res.status(400).send("Missing url");
+  }
+  let u;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return res.status(400).send("Invalid url");
+  }
+  if (u.protocol !== "https:") {
+    return res.status(400).send("Only https URLs allowed");
+  }
+  const h = u.hostname;
+  if (
+    !h.endsWith(".amazonaws.com") ||
+    !h.includes(".s3.")
+  ) {
+    return res.status(403).send("URL host not allowed");
+  }
+
+  try {
+    const upstream = await fetch(raw.trim());
+    if (!upstream.ok) {
+      return res.status(upstream.status).send("Upstream fetch failed");
+    }
+    const ct =
+      upstream.headers.get("content-type") || "application/octet-stream";
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader("Content-Type", ct);
+    res.setHeader("Cache-Control", "private, max-age=60");
+    res.send(buf);
+  } catch (e) {
+    console.error("fetch-for-print", e);
+    res.status(502).send("Fetch failed");
+  }
+});
+
 app.post("/printimage", async (req, res) => {
   console.log("Print request received");
 
