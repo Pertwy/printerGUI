@@ -1,0 +1,21 @@
+# Tkinter print UI — copy to /etc/systemd/system/tkinter-print-ui.service, edit paths/user, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tkinter-print-ui.service
+#
+# Requires desktop login session on :0. For Raspberry Pi OS Desktop, enable auto-login.
+
+[Unit]
+Description=Tkinter printer homepage (lightweight UI)
+After=network-online.target print-server.service graphical.target
+Wants=print-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/printerGUI
+User=pi
+Environment=DISPLAY=:0
+ExecStart=/home/pi/printerGUI/.venv/bin/python3 pi_tkinter/print_page.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

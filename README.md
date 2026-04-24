@@ -26,6 +26,50 @@ Optional systemd: **`scripts/print-server.service.example`** and **`scripts/vite
 - **`VITE_*`** values come from `.env` when Vite starts; restart dev after changing them.
 - Add those browser origins to **S3 CORS**, e.g. `http://192.168.1.50:5173` and `http://raspberrypi.local:5173`.
 
+### Raspberry Pi Tkinter print page (lightweight alternative)
+
+If Chromium + React is too heavy on the Pi, use a native Tkinter print page instead:
+
+1. Keep using your React app on your computer for uploads (`Upload` page).
+2. On the Pi, run the Node print server (`npm run server`).
+3. Install Python deps once:
+   - `python3 -m venv .venv`
+   - `source .venv/bin/activate`
+   - `pip install -r pi_tkinter/requirements.txt`
+4. Run:
+   - `python3 pi_tkinter/print_page.py`
+
+This app reads the same `.env` values used by the React app (`VITE_AWS_REGION`, `VITE_S3_BUCKET`, `VITE_S3_UPLOAD_PREFIX`/`VITE_S3_LIST_PREFIX`, and AWS keys), lists recent images from S3, and sends print jobs through `http://localhost:3000/fetch-for-print` + `/printimage`.
+
+Optional: set `PRINTER_API_BASE` if your print API is not local, for example:
+`PRINTER_API_BASE=http://127.0.0.1:3000 python3 pi_tkinter/print_page.py`
+
+If you see `ModuleNotFoundError: No module named '_tkinter'`:
+
+- On Raspberry Pi OS: `sudo apt install -y python3-tk`
+- On macOS (for local testing): use a Python build that ships with Tk (python.org installer is easiest).
+
+#### Tkinter boot on power-on (systemd)
+
+Use this if you want the Pi to boot directly into the Tkinter print UI instead of Chromium+React:
+
+1. Make sure print API service is installed first:
+   - `sudo cp scripts/print-server.service.example /etc/systemd/system/print-server.service`
+2. Create Python venv and deps in the project:
+   - `python3 -m venv .venv`
+   - `source .venv/bin/activate`
+   - `pip install -r pi_tkinter/requirements.txt`
+3. Copy the Tkinter service:
+   - `sudo cp scripts/tkinter-print-ui.service.example /etc/systemd/system/tkinter-print-ui.service`
+4. Edit `WorkingDirectory`, `User`, and `ExecStart` if your username/path differs from `pi`.
+5. Enable + start:
+   - `sudo systemctl daemon-reload`
+   - `sudo systemctl enable --now print-server.service`
+   - `sudo systemctl enable --now tkinter-print-ui.service`
+6. Check:
+   - `systemctl status print-server`
+   - `systemctl status tkinter-print-ui`
+
 #### Boot on power-on (systemd)
 
 1. Install dependencies once on the Pi: **`npm ci`** in the project folder (and ensure **`.env`** has your `VITE_*` values).
