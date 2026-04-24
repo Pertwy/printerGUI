@@ -65,8 +65,8 @@ class PrintPageApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Pi Printer - Print Page")
-        self.root.geometry("760x420")
-        self.root.minsize(680, 360)
+        self.root.attributes("-fullscreen", True)
+        self.root.bind("<Escape>", self._exit_fullscreen)
 
         self.choices: list[ImageChoice] = []
         self.selected_index: int = -1
@@ -81,6 +81,9 @@ class PrintPageApp:
         self.status_var = tk.StringVar(value="Loading from S3...")
         self._build_ui()
         self.refresh_images()
+
+    def _exit_fullscreen(self, _event=None) -> None:
+        self.root.attributes("-fullscreen", False)
 
     def _build_s3_client(self):
         region = (os.environ.get("VITE_AWS_REGION") or "").strip()
