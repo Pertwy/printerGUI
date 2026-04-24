@@ -9,19 +9,10 @@
 Notes:
 
 - S3 access is now handled in the React app (browser).
-- The Node server is only used for `/printimage`, `/test`, and `/fetch-for-print` (loads a presigned S3 image for printing so the browser does not need S3 CORS for that `fetch`).
-- Ensure your S3 bucket CORS allows `GET`, `PUT`, and `HEAD` from your app origin (for local dev: `http://localhost:5173`).
-
-### Raspberry Pi (printer server + Vite separately)
-
-Run **two terminals** (or two systemd units):
-
-1. Print API: **`./scripts/start-print-server.sh`** or **`npm run server`**
-2. UI: **`./scripts/start-ui.sh`** or **`npm run dev -- --host`**
-
-Vite proxies `/printimage` and `/test` to **`http://localhost:3000`**. Leave **`VITE_API_BASE` empty** in `.env` so printing uses that proxy (same origin as the UI). The print server listens only on **loopback** so phones use **`http://<pi-ip>:5173`**, not port 3000.
-
-Optional systemd: **`scripts/print-server.service.example`** and **`scripts/vite-ui.service.example`** (two separate services).
+- Upload and delete are fully browser-to-S3 (no Node server required for those actions).
+- The Node server is only used for `/printimage`, `/test`, and `/fetch-for-print` (for the Pi print flow).
+- Ensure your S3 bucket CORS allows `GET`, `PUT`, `DELETE`, `HEAD`, and `OPTIONS` from your app origin (for local dev: `http://localhost:5173`).
+- If using AWS SDK in browser, include permissive headers in S3 CORS (for example `AllowedHeaders: ["*"]`) so signed requests can pass preflight.
 
 - **`VITE_*`** values come from `.env` when Vite starts; restart dev after changing them.
 - Add those browser origins to **S3 CORS**, e.g. `http://192.168.1.50:5173` and `http://raspberrypi.local:5173`.
@@ -69,31 +60,6 @@ Use this if you want the Pi to boot directly into the Tkinter print UI instead o
 6. Check:
    - `systemctl status print-server`
    - `systemctl status tkinter-print-ui`
-
-#### Boot on power-on (systemd)
-
-1. Install dependencies once on the Pi: **`npm ci`** in the project folder (and ensure **`.env`** has your `VITE_*` values).
-2. Copy the examples (edit **`WorkingDirectory`** and **`User`** if your user is not `pi`):
-   - `sudo cp scripts/print-server.service.example /etc/systemd/system/print-server.service`
-   - `sudo cp scripts/vite-ui.service.example /etc/systemd/system/vite-ui.service`
-3. If **`npm`** is not at `/usr/bin/npm` (e.g. you use **nvm**), change **`ExecStart`** in both units to the full path from **`which npm`** on the Pi, or use:
-   `ExecStart=/bin/bash -lc 'cd /home/pi/printerGUI && npm run server'` (same idea for `npm run dev`).
-4. Enable and start:
-   - `sudo systemctl daemon-reload`
-   - `sudo systemctl enable --now print-server.service`
-   - `sudo systemctl enable --now vite-ui.service`
-5. Check: **`systemctl status print-server`** and **`systemctl status vite-ui`**. The UI should be at **`http://localhost:5173`** on the Pi and **`http://<pi-ip>:5173`** on your LAN.
-
-#### Fullscreen browser on the Pi (kiosk)
-
-Use **Raspberry Pi OS with desktop** (or any desktop where you auto-login). After graphical login, autostart Chromium:
-
-1. Copy **`scripts/kiosk-autostart.desktop.example`** to **`~/.config/autostart/printer-kiosk.desktop`** (see comments inside that file).
-2. Adjust **`Exec`**: use **`chromium`** or **`chromium-browser`** depending on what is installed (`which chromium`).
-3. The **`sleep 10`** gives Vite time to start after boot; increase if the page loads blank.
-4. Reboot or log out and back in. Exit kiosk temporarily with **Alt+F4** or **Ctrl+W** depending on the browser.
-
-If the Pi has **no monitor** (headless), fullscreen on the device itself does not apply; open **`http://<pi-ip>:5173`** from another computer or phone instead.
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

@@ -295,9 +295,6 @@ class PrintPageApp:
                 )
             button.pack()
 
-            key_label = ttk.Label(box, text=os.path.basename(item.key), width=16)
-            key_label.pack(pady=(4, 0))
-
         self.set_busy()
 
     def select_index(self, index: int) -> None:

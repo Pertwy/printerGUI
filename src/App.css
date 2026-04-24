@@ -361,6 +361,13 @@
   min-width: 120px;
 }
 
+.print-image-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .print-image-option:hover {
   border-color: var(--accent-border);
 }
@@ -382,6 +389,85 @@
   height: 96px;
   object-fit: contain;
   background: var(--bg);
+}
+
+.print-image-delete {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.print-image-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.print-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.print-modal {
+  width: min(420px, 92vw);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.print-modal-title {
+  margin: 0 0 8px;
+  color: var(--text-h);
+}
+
+.print-modal-text {
+  margin: 0;
+  color: var(--text);
+}
+
+.print-modal-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.print-modal-cancel,
+.print-modal-delete {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.print-modal-cancel {
+  background: var(--social-bg);
+  color: var(--text-h);
+}
+
+.print-modal-delete {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.print-modal-cancel:disabled,
+.print-modal-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 #center {

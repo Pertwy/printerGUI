@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiUrl } from "../api";
-import { getAllS3ImageChoices, type S3ImageChoice } from "../lib/s3";
+import {
+  deleteS3Object,
+  getAllS3ImageChoices,
+  type S3ImageChoice,
+} from "../lib/s3";
 import { blobToBase64 } from "../utils/image";
 
 const VISIBLE_COUNT = 5;
@@ -12,6 +16,8 @@ export default function PrintPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null);
 
   const refreshChoices = useCallback(async () => {
     setLoading(true);
@@ -70,8 +76,43 @@ export default function PrintPage() {
     }
   }
 
+  async function handleDelete(item: S3ImageChoice) {
+    if (loading || isPrinting || deletingKey) return;
+    setDeletingKey(item.key);
+    setLoadError(null);
+    try {
+      await deleteS3Object(item.key);
+      setChoices((prev) => {
+        const next = prev.filter((c) => c.key !== item.key);
+        if (!next.length) {
+          setSelectedKey(null);
+          setWindowStart(0);
+          return next;
+        }
+        if (selectedKey === item.key) {
+          setSelectedKey(next[0]!.key);
+        }
+        setWindowStart((prevStart) => {
+          const maxStart = Math.max(0, next.length - VISIBLE_COUNT);
+          return Math.min(prevStart, maxStart);
+        });
+        return next;
+      });
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Failed to delete image from S3",
+      );
+    } finally {
+      setDeletingKey(null);
+    }
+  }
+
   const lastWindowStart = Math.max(0, choices.length - VISIBLE_COUNT);
   const visible = choices.slice(windowStart, windowStart + VISIBLE_COUNT);
+  const pendingDeleteItem =
+    pendingDeleteKey === null
+      ? null
+      : choices.find((choice) => choice.key === pendingDeleteKey) ?? null;
 
   return (
     <section id="center">
@@ -118,21 +159,31 @@ export default function PrintPage() {
                 aria-label="Print image"
               >
                 {visible.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={selectedKey === item.key}
-                    className={
-                      "print-image-option" +
-                      (selectedKey === item.key
-                        ? " print-image-option--selected"
-                        : "")
-                    }
-                    onClick={() => setSelectedKey(item.key)}
-                  >
-                    <img src={item.url} alt="" width={96} height={96} />
-                  </button>
+                  <div key={item.key} className="print-image-card">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={selectedKey === item.key}
+                      className={
+                        "print-image-option" +
+                        (selectedKey === item.key
+                          ? " print-image-option--selected"
+                          : "")
+                      }
+                      onClick={() => setSelectedKey(item.key)}
+                      disabled={Boolean(deletingKey)}
+                    >
+                      <img src={item.url} alt="" width={96} height={96} />
+                    </button>
+                    <button
+                      type="button"
+                      className="print-image-delete"
+                      onClick={() => setPendingDeleteKey(item.key)}
+                      disabled={Boolean(deletingKey) || loading || isPrinting}
+                    >
+                      {deletingKey === item.key ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
                 ))}
               </div>
               <button
@@ -150,11 +201,49 @@ export default function PrintPage() {
         <button
           className="counter"
           type="submit"
-          disabled={isPrinting || loading || choices.length === 0}
+          disabled={isPrinting || loading || choices.length === 0 || Boolean(deletingKey)}
         >
           {isPrinting ? "Printing…" : "Print From Server"}
         </button>
       </form>
+      {pendingDeleteItem ? (
+        <div className="print-modal-backdrop" role="presentation">
+          <div
+            className="print-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-modal-title"
+          >
+            <h3 id="delete-modal-title" className="print-modal-title">
+              Delete image?
+            </h3>
+            <p className="print-modal-text">
+              This will permanently delete this image from S3.
+            </p>
+            <div className="print-modal-actions">
+              <button
+                type="button"
+                className="print-modal-cancel"
+                onClick={() => setPendingDeleteKey(null)}
+                disabled={Boolean(deletingKey)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="print-modal-delete"
+                onClick={() => {
+                  void handleDelete(pendingDeleteItem);
+                  setPendingDeleteKey(null);
+                }}
+                disabled={Boolean(deletingKey)}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

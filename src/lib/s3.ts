@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -177,4 +178,15 @@ export async function uploadJpegToS3(blob: Blob, key?: string): Promise<string> 
     })
   );
   return objectKey;
+}
+
+export async function deleteS3Object(key: string): Promise<void> {
+  const { region, bucket } = getConfig();
+  const client = getClient(region);
+  await client.send(
+    new DeleteObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    })
+  );
 }
