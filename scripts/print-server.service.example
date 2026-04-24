@@ -7,9 +7,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/pi/printerGUI
-User=pi
-ExecStart=/usr/bin/npm run server
+WorkingDirectory=/home/johnpatrickperkins/Desktop/printerGUI
+User=johnpatrickperkins
+ExecStart=/home/johnpatrickperkins/.nvm/versions/node/v24.14.1/bin/npm run server
 Restart=on-failure
 RestartSec=5
 
