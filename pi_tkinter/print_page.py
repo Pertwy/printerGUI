@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-Lightweight Tkinter print page for Raspberry Pi.
-
-This mirrors the React Print page behavior:
-- List recent images from S3.
-- Show a small selectable window of thumbnails.
-- Send the selected image through /fetch-for-print and then /printimage.
-"""
-
 from __future__ import annotations
 
 import base64
