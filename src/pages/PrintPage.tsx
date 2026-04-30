@@ -7,7 +7,7 @@ import {
 } from "../lib/s3";
 import { blobToBase64 } from "../utils/image";
 
-const VISIBLE_COUNT = 5;
+const VISIBLE_COUNT = 6;
 
 export default function PrintPage() {
   const [choices, setChoices] = useState<S3ImageChoice[]>([]);
@@ -100,7 +100,9 @@ export default function PrintPage() {
       });
     } catch (error) {
       setLoadError(
-        error instanceof Error ? error.message : "Failed to delete image from S3",
+        error instanceof Error
+          ? error.message
+          : "Failed to delete image from S3",
       );
     } finally {
       setDeletingKey(null);
@@ -112,7 +114,7 @@ export default function PrintPage() {
   const pendingDeleteItem =
     pendingDeleteKey === null
       ? null
-      : choices.find((choice) => choice.key === pendingDeleteKey) ?? null;
+      : (choices.find((choice) => choice.key === pendingDeleteKey) ?? null);
 
   return (
     <section id="center">
@@ -190,7 +192,9 @@ export default function PrintPage() {
                 type="button"
                 className="print-carousel-arrow"
                 aria-label="Next images"
-                onClick={() => setWindowStart((v) => Math.min(lastWindowStart, v + 1))}
+                onClick={() =>
+                  setWindowStart((v) => Math.min(lastWindowStart, v + 1))
+                }
                 disabled={windowStart >= lastWindowStart}
               >
                 ›
@@ -201,7 +205,12 @@ export default function PrintPage() {
         <button
           className="counter"
           type="submit"
-          disabled={isPrinting || loading || choices.length === 0 || Boolean(deletingKey)}
+          disabled={
+            isPrinting ||
+            loading ||
+            choices.length === 0 ||
+            Boolean(deletingKey)
+          }
         >
           {isPrinting ? "Printing…" : "Print From Server"}
         </button>
