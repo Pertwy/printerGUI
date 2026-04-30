@@ -7,7 +7,7 @@ import {
 } from "../lib/s3";
 import { blobToBase64 } from "../utils/image";
 
-const VISIBLE_COUNT = 6;
+const VISIBLE_COUNT = 5;
 
 export default function PrintPage() {
   const [choices, setChoices] = useState<S3ImageChoice[]>([]);
