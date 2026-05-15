@@ -10,10 +10,10 @@ Wants=print-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/john/Desktop/printerGUI/pi_tkinter
+WorkingDirectory=/home/john/Desktop/printerGUI
 User=john
 Environment=DISPLAY=:0
-ExecStart=/home/john/Desktop/printerGUI/pi_tkinter/venv/bin/python3 print_page.py
+ExecStart=/home/john/Desktop/printerGUI/.venv/bin/python3 pi_tkinter/print_page.py
 Restart=on-failure
 RestartSec=5
 
