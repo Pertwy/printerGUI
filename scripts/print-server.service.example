@@ -9,7 +9,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/john/Desktop/printerGUI
 User=john
-ExecStart=/home/john/.nvm/versions/node/v24.15.0/bin/npm run server
+ExecStart=/home/john/.nvm/versions/node/v24.15.0/bin/node server.js
 Restart=on-failure
 RestartSec=5
 
