@@ -209,13 +209,15 @@ class TFTPrintUI:
             return
         if self._touch is None:
             return
+        self._touch.log_config()
         self._touch_thread = threading.Thread(target=self._touch_loop, name="xpt2046-touch", daemon=True)
         self._touch_thread.start()
 
     def _touch_action_for_point(self, x: int, y: int) -> str | None:
+        pad = int((os.environ.get("TFT_TOUCH_HIT_PAD") or "8").strip() or "8")
         _, _, _, regions = button_bar_layout(self.width, self.height)
         for name, (x0, y0, x1, y1) in regions:
-            if x0 <= x <= x1 and y0 <= y <= y1:
+            if (x0 - pad) <= x <= (x1 + pad) and (y0 - pad) <= y <= (y1 + pad):
                 return name
         return None
 
@@ -235,31 +237,40 @@ class TFTPrintUI:
             return
         irq_pin: int | None = None
         touched_when_low = True
-        try:
-            irq_pin, touched_when_low = xt.setup_irq_gpio()
-        except Exception as exc:
-            print(f"Warning: touch IRQ setup failed ({exc}).", file=sys.stderr)
+        if touch.irq_enabled:
+            try:
+                irq_pin, touched_when_low = xt.setup_irq_gpio()
+            except Exception as exc:
+                print(f"Warning: touch IRQ disabled ({exc}); using SPI poll only.", file=sys.stderr)
+                touch.irq_enabled = False
+        if not touch.poll_enabled and irq_pin is None:
+            print("Warning: touch has no IRQ and poll is off; buttons will not work.", file=sys.stderr)
             return
         try:
             while not self.stop_event.is_set():
-                if not xt.irq_is_pressed(irq_pin, touched_when_low):
-                    time.sleep(0.02)
+                if not xt.touch_input_active(touch, irq_pin, touched_when_low):
+                    time.sleep(0.03)
                     continue
-                time.sleep(0.004)
-                if not xt.irq_is_pressed(irq_pin, touched_when_low):
+                time.sleep(0.006)
+                if not xt.touch_input_active(touch, irq_pin, touched_when_low):
                     continue
                 pt = touch.read_pixel(self.width, self.height)
                 if pt is None:
                     continue
                 action = self._touch_action_for_point(pt.x, pt.y)
+                if touch.debug:
+                    print(
+                        f"touch pixel=({pt.x},{pt.y}) action={action or 'none'}",
+                        file=sys.stderr,
+                    )
                 if action is not None:
                     self._dispatch_touch_action(action)
                 deadline = time.time() + 2.0
-                while xt.irq_is_pressed(irq_pin, touched_when_low) and not self.stop_event.is_set():
+                while xt.touch_input_active(touch, irq_pin, touched_when_low) and not self.stop_event.is_set():
                     if time.time() > deadline:
                         break
                     time.sleep(0.008)
-                time.sleep(0.14)
+                time.sleep(0.16)
         finally:
             if irq_pin is not None:
                 xt.cleanup_irq_gpio(irq_pin)

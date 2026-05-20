@@ -21,11 +21,18 @@ Environment (optional, all have sensible defaults):
   TFT_TOUCH_SWAP_XY      "1" to swap X/Y after calibration
   TFT_TOUCH_INVERT_X     "1"
   TFT_TOUCH_INVERT_Y     "1"
+  TFT_TOUCH_POLL         "1" = also detect touch via SPI pressure (works when IRQ is flaky)
+  TFT_TOUCH_USE_IRQ      "1" = use T_IRQ GPIO (default 17)
+  TFT_TOUCH_DEBUG        "1" = print raw coords / actions to stderr
+  TFT_TOUCH_PRESSURE_MIN default 400 (raw Z threshold)
+  TFT_TOUCH_HIT_PAD      pixels to expand button hit boxes (in print_page_tft)
 """
 
 from __future__ import annotations
 
 import os
+import sys
+import time
 from dataclasses import dataclass
 
 
@@ -57,6 +64,7 @@ class XPT2046:
     # Control bytes: 12-bit, single-ended, differential off — matches common Arduino libs.
     _CMD_X = 0xD0
     _CMD_Y = 0x90
+    _CMD_Z = 0xB0
 
     def __init__(
         self,
@@ -82,6 +90,12 @@ class XPT2046:
         self.swap_xy = _env_bool("TFT_TOUCH_SWAP_XY", False)
         self.invert_x = _env_bool("TFT_TOUCH_INVERT_X", False)
         self.invert_y = _env_bool("TFT_TOUCH_INVERT_Y", False)
+        self.pressure_min = _env_int("TFT_TOUCH_PRESSURE_MIN", 400)
+        self.poll_enabled = _env_bool("TFT_TOUCH_POLL", True)
+        self.irq_enabled = _env_bool("TFT_TOUCH_USE_IRQ", True)
+        self.debug = _env_bool("TFT_TOUCH_DEBUG", False)
+        self._spi_port = port
+        self._spi_device = device
 
     def close(self) -> None:
         try:
@@ -90,19 +104,42 @@ class XPT2046:
             pass
 
     def _read_adc12(self, cmd: int) -> int:
-        # Three-byte transfer; 12-bit result in bits from bytes 1–2 (controller-dependent layout).
-        raw = self._spi.xfer2([cmd, 0x00, 0x00])
-        return ((raw[1] & 0x7F) << 5) | (raw[2] >> 3)
+        # Two-byte transfer (common on Pi modules).
+        raw = self._spi.xfer2([cmd, 0x00])
+        value = ((raw[0] << 8) | raw[1]) >> 4
+        if value <= 0 or value >= 4095:
+            # Fallback layout used by some luma / legacy examples.
+            raw3 = self._spi.xfer2([cmd, 0x00, 0x00])
+            value = ((raw3[1] & 0x7F) << 5) | (raw3[2] >> 3)
+        return value & 0xFFF
+
+    def read_pressure(self) -> int:
+        return self._read_adc12(self._CMD_Z)
 
     def read_raw(self) -> tuple[int, int]:
         samples_x: list[int] = []
         samples_y: list[int] = []
-        for _ in range(4):
+        for _ in range(3):
             samples_x.append(self._read_adc12(self._CMD_X))
             samples_y.append(self._read_adc12(self._CMD_Y))
-        rx = sum(samples_x) // len(samples_x)
-        ry = sum(samples_y) // len(samples_y)
+        samples_x.sort()
+        samples_y.sort()
+        rx = samples_x[len(samples_x) // 2]
+        ry = samples_y[len(samples_y) // 2]
         return rx, ry
+
+    def is_finger_down(self) -> bool:
+        """Detect touch from SPI even when T_IRQ does not change."""
+        z = self.read_pressure()
+        if z >= self.pressure_min:
+            return True
+        rx, ry = self.read_raw()
+        # Idle panels often read ~0 or saturated; a finger usually lands in mid-range.
+        return (
+            80 < rx < 4080
+            and 80 < ry < 4080
+            and not (rx < 150 and ry < 150)
+        )
 
     def read_pixel(self, width: int, height: int) -> TouchPoint | None:
         rx, ry = self.read_raw()
@@ -123,6 +160,15 @@ class XPT2046:
         x = int(nx * (width - 1))
         y = int(ny * (height - 1))
         return TouchPoint(x=x, y=y)
+
+    def log_config(self) -> None:
+        print(
+            f"Touch: /dev/spidev{self._spi_port}.{self._spi_device} "
+            f"IRQ={'on' if self.irq_enabled else 'off'} "
+            f"poll={'on' if self.poll_enabled else 'off'} "
+            f"cal=({self.xmin},{self.xmax},{self.ymin},{self.ymax})",
+            file=sys.stderr,
+        )
 
 
 def open_optional_xpt2046() -> XPT2046 | None:
@@ -174,3 +220,64 @@ def cleanup_irq_gpio(irq_pin: int) -> None:
         GPIO.cleanup(irq_pin)
     except Exception:
         pass
+
+
+def touch_input_active(
+    touch: XPT2046,
+    irq_pin: int | None,
+    touched_when_low: bool,
+) -> bool:
+    """True if IRQ and/or SPI polling says the panel is being touched."""
+    if touch.irq_enabled and irq_pin is not None:
+        if irq_is_pressed(irq_pin, touched_when_low):
+            return True
+    if touch.poll_enabled:
+        return touch.is_finger_down()
+    return False
+
+
+def _diag_loop() -> None:
+    load_env = None
+    try:
+        from print_page_tft import load_env_file
+    except ImportError:
+        pass
+    else:
+        load_env = load_env_file
+    if load_env:
+        load_env()
+    touch = open_optional_xpt2046()
+    if touch is None:
+        raise SystemExit("Touch disabled (TFT_TOUCH_ENABLE=0)")
+    touch.log_config()
+    irq_pin = None
+    touched_when_low = True
+    if touch.irq_enabled:
+        irq_pin, touched_when_low = setup_irq_gpio()
+    print("Touch diagnostic — press the screen (Ctrl+C to quit)", file=sys.stderr)
+    try:
+        while True:
+            irq = (
+                irq_is_pressed(irq_pin, touched_when_low)
+                if irq_pin is not None
+                else False
+            )
+            poll = touch.is_finger_down()
+            if irq or poll:
+                rx, ry = touch.read_raw()
+                z = touch.read_pressure()
+                pt = touch.read_pixel(320, 240)
+                px = pt.x if pt else -1
+                py = pt.y if pt else -1
+                print(f"irq={irq} poll={poll} raw=({rx},{ry}) z={z} pixel=({px},{py})", file=sys.stderr)
+            time.sleep(0.08)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if irq_pin is not None:
+            cleanup_irq_gpio(irq_pin)
+        touch.close()
+
+
+if __name__ == "__main__":
+    _diag_loop()

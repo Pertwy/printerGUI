@@ -126,6 +126,23 @@ Environment (see also `pi_tft/xpt2046_touch.py` docstring):
 
 Touches on the bottom **Prev / Next / Print** bars invoke the same actions as before. Taps on the image area are ignored.
 
+**Buttons do nothing?** (common fixes)
+
+1. Confirm touch started — on launch you should see stderr like: `Touch: /dev/spidev0.1 IRQ=on poll=on ...`. If you see `Warning: touch disabled`, fix SPI/GPIO deps first.
+2. Run the diagnostic (press buttons and watch pixel coords):
+   ```bash
+   source .venv/bin/activate
+   TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
+   ```
+3. If **`pixel=(x,y)`** moves when you touch but **`action=none`**, calibration is off — try in `.env` or export before run:
+   ```bash
+   export TFT_TOUCH_SWAP_XY=1
+   export TFT_TOUCH_INVERT_Y=1
+   ```
+   Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
+4. If **`raw=(0,0)`** or **`z=0`** always, **T_CS** is probably not on **CE1** — check **`ls /dev/spidev*`** and wiring.
+5. IRQ on **GPIO 17** is already the default; if IRQ is wrong but SPI works, polling is on by default (`TFT_TOUCH_POLL=1`).
+
 If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or adjust **`TFT_TOUCH_SPI_*`** per your schematic.
 
 ## 10. Quick troubleshooting
