@@ -240,6 +240,13 @@ class TFTPrintUI:
         if touch.irq_enabled:
             try:
                 irq_pin, touched_when_low = xt.setup_irq_gpio()
+                if xt.detect_irq_stuck_low(irq_pin, touched_when_low):
+                    print(
+                        "Warning: T_IRQ stuck LOW — ignoring IRQ; using SPI touch only.",
+                        file=sys.stderr,
+                    )
+                    touch.irq_enabled = False
+                    irq_pin = None
             except Exception as exc:
                 print(f"Warning: touch IRQ disabled ({exc}); using SPI poll only.", file=sys.stderr)
                 touch.irq_enabled = False

@@ -107,13 +107,26 @@ The app reads touch on a **second SPI chip-select** (default **`spidev0.1`**, i.
 
 Silkscreen → Pi (typical):
 
+**Your wiring (matches `print_page_tft.py` display + touch defaults):**
+
+| Screen | BCM GPIO | Physical pin |
+|--------|----------|--------------|
+| Display CS | **8** (CE0) | 24 |
+| Display DC | **24** | 18 |
+| Display RESET | **25** | 22 |
+| MOSI / SCK | 10 / 11 | 19 / 23 |
+| **T_CS** | **7** (CE1) | **26** |
+| **T_IRQ** | **17** | **11** |
+
+Note: **physical pin 22** is display **RESET (GPIO 25)** — not touch. Touch CS is **pin 26 = GPIO 7**, not BCM GPIO 22.
+
 | Module | Function | BCM / bus |
 |--------|-----------|-----------|
-| T_CLK  | SPI clock | GPIO 11 (SCLK) |
+| T_CLK  | SPI clock | GPIO 11 |
 | T_DIN  | MOSI      | GPIO 10 |
 | T_DO   | MISO      | GPIO 9 |
-| T_CS   | Touch CS  | **CE1 = GPIO 7** (for default `spidev0.1`) |
-| T_IRQ  | Touch IRQ | Set **`TFT_TOUCH_IRQ_GPIO`** to your wire (often 17 or 25 — **avoid GPIO 25 if it is display RST**) |
+| T_CS   | Touch CS  | **GPIO 7** (header pin 26) — `export TFT_TOUCH_CS_GPIO=7` if auto-probe fails |
+| T_IRQ  | Touch IRQ | **GPIO 17** (pin 11); stuck LOW is ignored automatically |
 
 Environment (see also `pi_tft/xpt2046_touch.py` docstring):
 
@@ -140,7 +153,13 @@ Touches on the bottom **Prev / Next / Print** bars invoke the same actions as be
    export TFT_TOUCH_INVERT_Y=1
    ```
    Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
-4. If **`raw=(0,0)`** or **`z=0`** always, **T_CS** is probably not on **CE1** — check **`ls /dev/spidev*`** and wiring.
+4. If **`raw=(0,0)`** or **`z=0`** always with **T_CS on pin 26**:
+   ```bash
+   export TFT_TOUCH_CS_GPIO=7
+   export TFT_TOUCH_IRQ_GPIO=17
+   TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
+   ```
+   Auto-probe tries **GPIO 7** first, then 22, 27, 16, 5, then hardware CE1.
 5. IRQ on **GPIO 17** is already the default; if IRQ is wrong but SPI works, polling is on by default (`TFT_TOUCH_POLL=1`).
 
 If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or adjust **`TFT_TOUCH_SPI_*`** per your schematic.
