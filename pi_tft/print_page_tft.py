@@ -80,7 +80,18 @@ class TFTPrintUI:
         # - SPI port=0, device=0
         # - DC pin: GPIO 24
         # - RESET pin: GPIO 25
-        serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
+        try:
+            serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
+        except ModuleNotFoundError as exc:
+            if exc.name in {"RPi", "RPi.GPIO"}:
+                raise SystemExit(
+                    "Missing Raspberry Pi GPIO Python module.\n"
+                    "Install one of these, then retry:\n"
+                    "  sudo apt install -y python3-rpi-lgpio\n"
+                    "or inside venv:\n"
+                    "  pip install rpi-lgpio"
+                ) from exc
+            raise
         self.device = ili9341(serial, rotate=1)
         self.width, self.height = self.device.size
 
