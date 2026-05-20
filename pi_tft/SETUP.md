@@ -19,10 +19,7 @@ Confirm the device exists:
 
 ```bash
 ls -l /dev/spidev0.0
-ls -l /dev/spidev0.1
 ```
-
-Touch uses **`/dev/spidev0.1`** by default (hardware **CE1**, GPIO 7). If `spidev0.1` is missing, enable both CE0 and CE1 (default Pi SPI overlay usually provides both).
 
 If missing after reboot, check **`/boot/firmware/config.txt`** (or **`/boot/config.txt`**) for `dtparam=spi=on`.
 
@@ -101,79 +98,17 @@ sudo systemctl enable --now print-server.service
 sudo systemctl enable --now tft-print-ui.service
 ```
 
-## 9. XPT2046 touchscreen (optional)
+## 9. Display wiring (reference)
 
-The app reads touch on a **second SPI chip-select** (default **`spidev0.1`**, i.e. **CE1 / GPIO 7** for **T_CS**), and **T_IRQ** on a GPIO (default **BCM 17** — change if your board differs).
-
-Silkscreen → Pi (typical):
-
-**Your wiring (matches `print_page_tft.py` display + touch defaults):**
-
-| Screen | BCM GPIO | Physical pin |
+| Signal | BCM GPIO | Physical pin |
 |--------|----------|--------------|
-| Display CS | **8** (CE0) | 24 |
-| Display DC | **24** | 18 |
-| Display RESET | **25** | 22 |
-| MOSI / SCK | 10 / 11 | 19 / 23 |
-| **T_CS** | **7** (CE1) | **26** |
-| **T_IRQ** | **17** | **11** |
+| CS | **8** (CE0) | 24 |
+| DC | **24** | 18 |
+| RESET | **25** | 22 |
+| MOSI | **10** | 19 |
+| SCK | **11** | 23 |
 
-Note: **physical pin 22** is display **RESET (GPIO 25)** — not touch. Touch CS is **pin 26 = GPIO 7**, not BCM GPIO 22.
-
-| Module | Function | BCM / bus |
-|--------|-----------|-----------|
-| T_CLK  | SPI clock | GPIO 11 |
-| T_DIN  | MOSI      | GPIO 10 |
-| T_DO   | MISO      | GPIO 9 |
-| T_CS   | Touch CS  | **GPIO 7 / CE1** (header pin 26) — use `export TFT_TOUCH_SPI_DEVICE=1` (not GPIO bit-bang on 7) |
-| T_IRQ  | Touch IRQ | **GPIO 17** (pin 11); stuck LOW is ignored automatically |
-
-Environment (see also `pi_tft/xpt2046_touch.py` docstring):
-
-- **`TFT_TOUCH_ENABLE`**: `1` (default) or `0` to disable touch.
-- **`TFT_TOUCH_SPI_PORT`** / **`TFT_TOUCH_SPI_DEVICE`**: default `0` / `1`.
-- **`TFT_TOUCH_IRQ_GPIO`**: BCM number for **T_IRQ** (default `17`).
-- **`TFT_TOUCH_IRQ_ACTIVE`**: `low` (default) or `high` when pressed.
-- **Calibration**: `TFT_TOUCH_XMIN`, `TFT_TOUCH_XMAX`, `TFT_TOUCH_YMIN`, `TFT_TOUCH_YMAX` (raw ADC, defaults ~200–3900).
-- **Orientation**: `TFT_TOUCH_SWAP_XY=1`, `TFT_TOUCH_INVERT_X=1`, `TFT_TOUCH_INVERT_Y=1` if pointer does not match buttons.
-
-Touches on the bottom **Prev / Next / Print** bars invoke the same actions as before. Taps on the image area are ignored.
-
-**Buttons do nothing?** (common fixes)
-
-1. Confirm touch started — on launch you should see stderr like: `Touch: /dev/spidev0.1 IRQ=on poll=on ...`. If you see `Warning: touch disabled`, fix SPI/GPIO deps first.
-2. Run the diagnostic (press buttons and watch pixel coords):
-   ```bash
-   source .venv/bin/activate
-   TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
-   ```
-3. If **`pixel=(x,y)`** moves when you touch but **`action=none`**, calibration is off — try in `.env` or export before run:
-   ```bash
-   export TFT_TOUCH_SWAP_XY=1
-   export TFT_TOUCH_INVERT_Y=1
-   ```
-   Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
-4. If **every scan line is `0x00`** (CE0, CE1, GPIO5, etc.): the **LCD can work without MISO** — touch cannot.
-   **T_DO must go to Pi pin 21 (MISO, GPIO 9).** Many cheap flex cables omit or break that line.
-   - Loopback test: `cd pi_tft && python3 touch_open.py --loopback` (jumper pin 19 ↔ 21).
-   - Or use kernel touch: `pip install evdev`, `export TFT_TOUCH_USE_EVDEV=1`, check `python3 touch_open.py --list-input`.
-5. If **`touch raw bytes: ['0x0', ...]`** (all zeros): the touch IC is not answering on that chip-select. Run:
-   ```bash
-   TFT_TOUCH_SCAN=1 TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
-   ```
-   Press the screen during the scan. If **CE0** wins, T_CS is tied to **display CS (pin 24)** → `export TFT_TOUCH_SPI_DEVICE=0`. Check `/boot/firmware/config.txt` does **not** contain `dtoverlay=spi0-1cs`.
-5. If **`GPIO busy`** on `TFT_TOUCH_CS_GPIO=7`: pin 26 is **hardware CE1** — do **not** bit-bang GPIO 7. Use:
-   ```bash
-   unset TFT_TOUCH_CS_GPIO
-   export TFT_TOUCH_SPI_DEVICE=1
-   export TFT_TOUCH_IRQ_GPIO=17
-   export TFT_TOUCH_USE_IRQ=0
-   TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
-   ```
-   (`TFT_TOUCH_CS_GPIO=7` also works — it maps to CE1 automatically.)
-5. IRQ on **GPIO 17** is already the default; if IRQ is wrong but SPI works, polling is on by default (`TFT_TOUCH_POLL=1`).
-
-If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or adjust **`TFT_TOUCH_SPI_*`** per your schematic.
+The TFT UI shows **Prev / Next / Print** on screen only (no touchscreen input).
 
 ## 10. Quick troubleshooting
 
@@ -186,7 +121,5 @@ If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or a
 | `swig` errors | `sudo apt install -y swig` |
 | Blank / no display | SPI enabled; wiring; `port=0` / `device=0`; DC/RST GPIOs |
 | Print fails | `npm run server` running; `PRINTER_API_BASE`; firewall |
-| Touch misses buttons | Set **`TFT_TOUCH_IRQ_GPIO`**; tune **`TFT_TOUCH_*MIN/MAX`** and **`TFT_TOUCH_SWAP_XY`** / **`INVERT_*`** |
-| No `/dev/spidev0.1` | Wire **T_CS** to **CE1**; SPI enabled; check **`ls /dev/spidev*`** |
 
 For more context see the main **`README.md`** (ILI9341 TFT section).

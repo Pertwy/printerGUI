@@ -12,11 +12,6 @@ Wants=print-server.service
 Type=simple
 WorkingDirectory=/home/john/Desktop/printerGUI
 User=john
-# Touch: auto-scan CE0/CE1/GPIO CS on startup. T_IRQ = pin 11 (BCM 17).
-Environment=TFT_TOUCH_SCAN=1
-Environment=TFT_TOUCH_AUTO_PROBE=1
-Environment=TFT_TOUCH_IRQ_GPIO=17
-Environment=TFT_TOUCH_USE_IRQ=0
 ExecStart=/home/john/Desktop/printerGUI/.venv/bin/python3 pi_tft/print_page_tft.py
 Restart=on-failure
 RestartSec=5

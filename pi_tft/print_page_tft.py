@@ -4,16 +4,9 @@ from __future__ import annotations
 import base64
 import io
 import os
-import sys
 import threading
 import time
 from dataclasses import dataclass
-
-# Allow `import xpt2046_touch` when cwd is project root (not `pi_tft/`).
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)
-# touch_open / evdev_touch live alongside this file
 
 import boto3
 import requests
@@ -24,6 +17,8 @@ from PIL import Image, ImageDraw, ImageFont
 MAX_ITEMS = 200
 LOW_REFRESH_SECONDS = 0.2
 AUTO_REFRESH_SECONDS = 30.0
+# TEMPORARY: auto-advance to next image (set to 0 to disable).
+AUTO_ADVANCE_SECONDS = 3.0
 # Bottom bar for Prev / Next / Print. Image uses full width × (height - bar).
 BUTTON_BAR_HEIGHT = 44
 IMAGE_BG = "#000000"
@@ -32,7 +27,7 @@ IMAGE_BG = "#000000"
 def button_bar_layout(width: int, height: int) -> tuple[int, int, int, list[tuple[str, tuple[int, int, int, int]]]]:
     """
     Return (bar_top, margin, button_height, [(name, (x0,y0,x1,y1)), ...])
-    in the same pixel space as `render()` / touch mapping.
+    in the same pixel space as `render()`.
     """
     m = 3
     bar_top = height - BUTTON_BAR_HEIGHT
@@ -154,13 +149,10 @@ class TFTPrintUI:
         self.needs_redraw = True
         self.last_draw_signature = ""
         self.last_refresh_started = 0.0
-
-        self._touch = None
-        self._touch_thread: threading.Thread | None = None
+        self.last_advance_at = time.time()
 
         self.set_status("Loading from S3...")
         self.refresh_images()
-        self._maybe_start_touch()
 
     def _build_s3_client(self):
         region = (os.environ.get("VITE_AWS_REGION") or "").strip()
@@ -196,139 +188,6 @@ class TFTPrintUI:
             kwargs["aws_session_token"] = session_token
         client = boto3.client("s3", **kwargs)
         return client, bucket, primary_prefix
-
-    def _maybe_start_touch(self) -> None:
-        flag = (os.environ.get("TFT_TOUCH_ENABLE") or "1").strip().lower()
-        if flag in ("0", "false", "no", "off"):
-            return
-        try:
-            import touch_open as to
-            import xpt2046_touch as xt
-
-            self._touch = to.open_touch_input()
-            if self._touch is None:
-                return
-            self._touch.log_config()
-            if getattr(self._touch, "backend", "") != "evdev":
-                try:
-                    rx, ry, z = xt._sample_touch(self._touch)
-                    print(f"Touch startup sample: raw=({rx},{ry}) z={z}", file=sys.stderr)
-                    if not xt._valid_raw(rx, ry, z):
-                        to.print_miso_help()
-                except Exception:
-                    pass
-        except Exception as exc:
-            print(f"Warning: touch disabled ({exc}).", file=sys.stderr)
-            return
-        if self._touch is None:
-            return
-        self._touch_thread = threading.Thread(target=self._touch_loop, name="xpt2046-touch", daemon=True)
-        self._touch_thread.start()
-
-    def _touch_action_for_point(self, x: int, y: int) -> str | None:
-        pad = int((os.environ.get("TFT_TOUCH_HIT_PAD") or "8").strip() or "8")
-        _, _, _, regions = button_bar_layout(self.width, self.height)
-        for name, (x0, y0, x1, y1) in regions:
-            if (x0 - pad) <= x <= (x1 + pad) and (y0 - pad) <= y <= (y1 + pad):
-                return name
-        return None
-
-    def _dispatch_touch_action(self, action: str) -> None:
-        if action == "prev":
-            self.prev_item()
-        elif action == "next":
-            self.next_item()
-        elif action == "print":
-            self.print_selected()
-
-    def _touch_loop(self) -> None:
-        import xpt2046_touch as xt
-
-        touch = self._touch
-        if touch is None:
-            return
-        if getattr(touch, "backend", "") == "evdev":
-            self._touch_loop_evdev()
-            return
-        irq_pin: int | None = None
-        touched_when_low = True
-        if touch.irq_enabled:
-            try:
-                irq_pin, touched_when_low = xt.setup_irq_gpio()
-                if xt.detect_irq_stuck_low(irq_pin, touched_when_low):
-                    print(
-                        "Warning: T_IRQ stuck LOW — ignoring IRQ; using SPI touch only.",
-                        file=sys.stderr,
-                    )
-                    touch.irq_enabled = False
-                    irq_pin = None
-            except Exception as exc:
-                print(f"Warning: touch IRQ disabled ({exc}); using SPI poll only.", file=sys.stderr)
-                touch.irq_enabled = False
-        if not touch.poll_enabled and irq_pin is None:
-            print("Warning: touch has no IRQ and poll is off; buttons will not work.", file=sys.stderr)
-            return
-        try:
-            while not self.stop_event.is_set():
-                if not xt.touch_input_active(touch, irq_pin, touched_when_low):
-                    time.sleep(0.03)
-                    continue
-                time.sleep(0.006)
-                if not xt.touch_input_active(touch, irq_pin, touched_when_low):
-                    continue
-                pt = touch.read_pixel(self.width, self.height)
-                if pt is None:
-                    continue
-                action = self._touch_action_for_point(pt.x, pt.y)
-                if touch.debug:
-                    print(
-                        f"touch pixel=({pt.x},{pt.y}) action={action or 'none'}",
-                        file=sys.stderr,
-                    )
-                if action is not None:
-                    self._dispatch_touch_action(action)
-                deadline = time.time() + 2.0
-                while xt.touch_input_active(touch, irq_pin, touched_when_low) and not self.stop_event.is_set():
-                    if time.time() > deadline:
-                        break
-                    time.sleep(0.008)
-                time.sleep(0.16)
-        finally:
-            if irq_pin is not None:
-                xt.cleanup_irq_gpio(irq_pin)
-
-    def _touch_loop_evdev(self) -> None:
-        touch = self._touch
-        if touch is None:
-            return
-        try:
-            while not self.stop_event.is_set():
-                if not touch.is_finger_down():
-                    time.sleep(0.03)
-                    continue
-                time.sleep(0.006)
-                pt = touch.read_pixel(self.width, self.height)
-                if pt is None:
-                    continue
-                action = self._touch_action_for_point(pt.x, pt.y)
-                if getattr(touch, "debug", False):
-                    print(
-                        f"touch evdev pixel=({pt.x},{pt.y}) action={action or 'none'}",
-                        file=sys.stderr,
-                    )
-                if action is not None:
-                    self._dispatch_touch_action(action)
-                deadline = time.time() + 2.0
-                while touch.is_finger_down() and not self.stop_event.is_set():
-                    if time.time() > deadline:
-                        break
-                    time.sleep(0.008)
-                time.sleep(0.16)
-        finally:
-            try:
-                touch.close()
-            except Exception:
-                pass
 
     def set_status(self, message: str) -> None:
         with self.state_lock:
@@ -393,6 +252,7 @@ class TFTPrintUI:
                 self.status_text = f"Loaded {len(choices)} image(s)"
             else:
                 self.status_text = "No images found in S3 prefix"
+            self.last_advance_at = time.time()
             self.needs_redraw = True
         self._ensure_selected_preview()
 
@@ -482,6 +342,18 @@ class TFTPrintUI:
             self.needs_redraw = True
         self._ensure_selected_preview()
 
+    def maybe_auto_advance(self) -> None:
+        """TEMPORARY: cycle to the next image every AUTO_ADVANCE_SECONDS."""
+        if AUTO_ADVANCE_SECONDS <= 0:
+            return
+        with self.state_lock:
+            can_advance = not self.loading and not self.is_printing and len(self.choices) > 1
+            elapsed = time.time() - self.last_advance_at
+        if can_advance and elapsed >= AUTO_ADVANCE_SECONDS:
+            self.next_item()
+            with self.state_lock:
+                self.last_advance_at = time.time()
+
     def maybe_auto_refresh(self) -> None:
         with self.state_lock:
             can_refresh = not self.loading and not self.is_printing
@@ -542,34 +414,19 @@ class TFTPrintUI:
         ):
             self._draw_button(draw, bounds, label.capitalize(), active)
 
-        try:
-            from xpt2046_touch import spi_bus_lock
-        except ImportError:
-            spi_bus_lock = None
-        if spi_bus_lock is not None:
-            with spi_bus_lock:
-                self.device.display(img)
-        else:
-            self.device.display(img)
+        self.device.display(img)
 
     def run(self) -> None:
         try:
             while not self.stop_event.is_set():
                 self.maybe_auto_refresh()
+                self.maybe_auto_advance()
                 self.render()
                 time.sleep(LOW_REFRESH_SECONDS)
         except KeyboardInterrupt:
             pass
         finally:
             self.stop_event.set()
-            if self._touch_thread is not None:
-                self._touch_thread.join(timeout=1.5)
-            touch = getattr(self, "_touch", None)
-            if touch is not None:
-                try:
-                    touch.close()
-                except Exception:
-                    pass
 
 
 def main() -> None:

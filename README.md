@@ -71,8 +71,6 @@ Current default display wiring in `pi_tft/print_page_tft.py`:
 
 The process stays alive in a loop so the panel keeps showing the UI. It auto-refreshes image listings at a low rate and redraws when state changes.
 
-Touch: **XPT2046** is supported via `pi_tft/xpt2046_touch.py` (second SPI CS, default `spidev0.1` / CE1, IRQ default BCM 17). See [`pi_tft/SETUP.md`](pi_tft/SETUP.md) §9 and env vars `TFT_TOUCH_*`.
-
 #### Tkinter boot on power-on (systemd)
 
 Use this if you want the Pi to boot directly into the Tkinter print UI instead of Chromium+React:
