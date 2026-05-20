@@ -8,7 +8,18 @@ import threading
 import time
 from dataclasses import dataclass
 
-import boto3
+try:
+    import boto3
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing Python dependencies (boto3).\n"
+        "Use the project venv, not system python3:\n"
+        "  cd ~/Desktop/printerGUI\n"
+        "  source .venv/bin/activate\n"
+        "  pip install -r pi_tkinter/requirements.txt\n"
+        "  python3 pi_tft/print_page_tft.py"
+    ) from None
+
 import requests
 from luma.core.interface.serial import spi
 from luma.lcd.device import ili9341
