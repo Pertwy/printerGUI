@@ -153,7 +153,11 @@ Touches on the bottom **Prev / Next / Print** bars invoke the same actions as be
    export TFT_TOUCH_INVERT_Y=1
    ```
    Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
-4. If **`touch raw bytes: ['0x0', ...]`** (all zeros): the touch IC is not answering on that chip-select. Run:
+4. If **every scan line is `0x00`** (CE0, CE1, GPIO5, etc.): the **LCD can work without MISO** — touch cannot.
+   **T_DO must go to Pi pin 21 (MISO, GPIO 9).** Many cheap flex cables omit or break that line.
+   - Loopback test: `cd pi_tft && python3 touch_open.py --loopback` (jumper pin 19 ↔ 21).
+   - Or use kernel touch: `pip install evdev`, `export TFT_TOUCH_USE_EVDEV=1`, check `python3 touch_open.py --list-input`.
+5. If **`touch raw bytes: ['0x0', ...]`** (all zeros): the touch IC is not answering on that chip-select. Run:
    ```bash
    TFT_TOUCH_SCAN=1 TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
    ```

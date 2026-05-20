@@ -405,11 +405,13 @@ def scan_touch_bus(*, verbose: bool | None = None) -> tuple[XPT2046 | None, str]
 
     if verbose:
         print(
-            "\nTouch scan: every config returned 0x00 on MISO. Checklist:\n"
-            "  1) In /boot/firmware/config.txt avoid 'dtoverlay=spi0-1cs' (needs 2 CE lines).\n"
-            "  2) Many boards tie T_CS to LCD CS (pin 24) not pin 26 — CE0 should then work.\n"
-            "  3) Confirm MISO (GPIO 9) is connected on the module flex.\n"
-            "  4) Run scan while pressing: TFT_TOUCH_SCAN=1 python3 pi_tft/xpt2046_touch.py\n",
+            "\nTouch scan: every config returned 0x00 on MISO.\n"
+            "  The LCD does not need MISO — touch does (T_DO → Pi pin 21 / GPIO 9).\n"
+            "  Checklist:\n"
+            "  1) Wire T_DO to MISO (pin 21). Test: python3 pi_tft/touch_open.py --loopback\n"
+            "  2) config.txt: avoid 'dtoverlay=spi0-1cs' if using CE1 (pin 26).\n"
+            "  3) Try kernel touch: pip install evdev && export TFT_TOUCH_USE_EVDEV=1\n"
+            "  4) List inputs: python3 pi_tft/touch_open.py --list-input\n",
             file=sys.stderr,
         )
     return None, ""

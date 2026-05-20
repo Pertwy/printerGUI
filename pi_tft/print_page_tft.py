@@ -13,6 +13,7 @@ from dataclasses import dataclass
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
+# touch_open / evdev_touch live alongside this file
 
 import boto3
 import requests
@@ -201,26 +202,26 @@ class TFTPrintUI:
         if flag in ("0", "false", "no", "off"):
             return
         try:
+            import touch_open as to
             import xpt2046_touch as xt
 
-            self._touch = xt.open_optional_xpt2046()
+            self._touch = to.open_touch_input()
+            if self._touch is None:
+                return
+            self._touch.log_config()
+            if getattr(self._touch, "backend", "") != "evdev":
+                try:
+                    rx, ry, z = xt._sample_touch(self._touch)
+                    print(f"Touch startup sample: raw=({rx},{ry}) z={z}", file=sys.stderr)
+                    if not xt._valid_raw(rx, ry, z):
+                        to.print_miso_help()
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"Warning: touch disabled ({exc}).", file=sys.stderr)
             return
         if self._touch is None:
             return
-        self._touch.log_config()
-        try:
-            rx, ry, z = xt._sample_touch(self._touch)
-            print(f"Touch startup sample: raw=({rx},{ry}) z={z}", file=sys.stderr)
-            if not xt._valid_raw(rx, ry, z):
-                print(
-                    "Touch: no SPI response yet — while pressing screen run: "
-                    "TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py",
-                    file=sys.stderr,
-                )
-        except Exception:
-            pass
         self._touch_thread = threading.Thread(target=self._touch_loop, name="xpt2046-touch", daemon=True)
         self._touch_thread.start()
 
@@ -245,6 +246,9 @@ class TFTPrintUI:
 
         touch = self._touch
         if touch is None:
+            return
+        if getattr(touch, "backend", "") == "evdev":
+            self._touch_loop_evdev()
             return
         irq_pin: int | None = None
         touched_when_low = True
@@ -292,6 +296,39 @@ class TFTPrintUI:
         finally:
             if irq_pin is not None:
                 xt.cleanup_irq_gpio(irq_pin)
+
+    def _touch_loop_evdev(self) -> None:
+        touch = self._touch
+        if touch is None:
+            return
+        try:
+            while not self.stop_event.is_set():
+                if not touch.is_finger_down():
+                    time.sleep(0.03)
+                    continue
+                time.sleep(0.006)
+                pt = touch.read_pixel(self.width, self.height)
+                if pt is None:
+                    continue
+                action = self._touch_action_for_point(pt.x, pt.y)
+                if getattr(touch, "debug", False):
+                    print(
+                        f"touch evdev pixel=({pt.x},{pt.y}) action={action or 'none'}",
+                        file=sys.stderr,
+                    )
+                if action is not None:
+                    self._dispatch_touch_action(action)
+                deadline = time.time() + 2.0
+                while touch.is_finger_down() and not self.stop_event.is_set():
+                    if time.time() > deadline:
+                        break
+                    time.sleep(0.008)
+                time.sleep(0.16)
+        finally:
+            try:
+                touch.close()
+            except Exception:
+                pass
 
     def set_status(self, message: str) -> None:
         with self.state_lock:
