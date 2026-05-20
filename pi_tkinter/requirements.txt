@@ -1,3 +1,4 @@
 boto3
 Pillow
 requests
+luma.lcd

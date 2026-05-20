@@ -1,0 +1,20 @@
+# ILI9341 TFT print UI — copy to /etc/systemd/system/tft-print-ui.service, edit paths/user, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tft-print-ui.service
+#
+# Runs direct-to-SPI using luma.lcd (no framebuffer/fbcp-ili9341 required).
+
+[Unit]
+Description=ILI9341 TFT printer homepage (PIL + luma.lcd)
+After=network-online.target print-server.service
+Wants=print-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/john/Desktop/printerGUI
+User=john
+ExecStart=/home/john/Desktop/printerGUI/.venv/bin/python3 pi_tft/print_page_tft.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

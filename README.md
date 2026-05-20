@@ -40,6 +40,34 @@ If you see `ModuleNotFoundError: No module named '_tkinter'`:
 - On Raspberry Pi OS: `sudo apt install -y python3-tk`
 - On macOS (for local testing): use a Python build that ships with Tk (python.org installer is easiest).
 
+### Raspberry Pi ILI9341 TFT print page (SPI + luma.lcd)
+
+If you want a small direct-rendered UI on a 320x240 SPI screen, use the TFT app:
+
+1. Keep using your React app on your computer for uploads (`Upload` page).
+2. On the Pi, run the Node print server (`npm run server`).
+3. Install Python deps once:
+   - `python3 -m venv .venv`
+   - `source .venv/bin/activate`
+   - `pip install -r pi_tkinter/requirements.txt`
+4. Run:
+   - `python3 pi_tft/print_page_tft.py`
+
+This UI draws directly to the ILI9341 with PIL + `luma.lcd`, not framebuffer (`/dev/fb1`) and not `fbcp-ili9341`.
+
+Current default display wiring in `pi_tft/print_page_tft.py`:
+
+- Driver: `ili9341`
+- SPI: `port=0`, `device=0`
+- GPIO DC: `24`
+- GPIO RESET: `25`
+- Rotation: `rotate=1`
+- Uses `device.size` for render size
+
+The process stays alive in a loop so the panel keeps showing the UI. It auto-refreshes image listings at a low rate and redraws when state changes.
+
+Touch is not enabled yet; the module includes TODO hooks for XPT2046 pins `T_CLK`, `T_CS`, `T_DIN`, `T_DO`, `T_IRQ`.
+
 #### Tkinter boot on power-on (systemd)
 
 Use this if you want the Pi to boot directly into the Tkinter print UI instead of Chromium+React:
@@ -60,6 +88,27 @@ Use this if you want the Pi to boot directly into the Tkinter print UI instead o
 6. Check:
    - `systemctl status print-server`
    - `systemctl status tkinter-print-ui`
+
+#### ILI9341 TFT boot on power-on (systemd)
+
+Use this to boot straight into the SPI TFT UI (no desktop session required):
+
+1. Install print API service first:
+   - `sudo cp scripts/print-server.service.example /etc/systemd/system/print-server.service`
+2. Create Python venv and deps in the project:
+   - `python3 -m venv .venv`
+   - `source .venv/bin/activate`
+   - `pip install -r pi_tkinter/requirements.txt`
+3. Copy the TFT service:
+   - `sudo cp scripts/tft-print-ui.service.example /etc/systemd/system/tft-print-ui.service`
+4. Edit `WorkingDirectory`, `User`, and `ExecStart` if your username/path differs from `john`.
+5. Enable + start:
+   - `sudo systemctl daemon-reload`
+   - `sudo systemctl enable --now print-server.service`
+   - `sudo systemctl enable --now tft-print-ui.service`
+6. Check:
+   - `systemctl status print-server`
+   - `systemctl status tft-print-ui`
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

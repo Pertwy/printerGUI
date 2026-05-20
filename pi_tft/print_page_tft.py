@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import base64
+import io
+import os
+import threading
+import time
+from dataclasses import dataclass
+
+import boto3
+import requests
+from luma.core.interface.serial import spi
+from luma.lcd.device import ili9341
+from PIL import Image, ImageDraw, ImageFont
+
+MAX_ITEMS = 200
+LOW_REFRESH_SECONDS = 0.2
+AUTO_REFRESH_SECONDS = 30.0
+
+
+def normalize_prefix(prefix: str) -> str:
+    trimmed = prefix.strip().lstrip("/")
+    if not trimmed:
+        return ""
+    return trimmed if trimmed.endswith("/") else f"{trimmed}/"
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Minimal .env loader so this script works without python-dotenv."""
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+@dataclass
+class ImageChoice:
+    key: str
+    url: str
+
+
+class TFTPrintUI:
+    """
+    Direct-rendered UI for ILI9341 using PIL + luma.lcd.
+
+    Run on Raspberry Pi:
+      1) pip install -r pi_tkinter/requirements.txt
+      2) python3 pi_tft/print_page_tft.py
+    """
+
+    def __init__(self) -> None:
+        load_env_file()
+        self.server_base = (os.environ.get("PRINTER_API_BASE") or "http://localhost:3000").rstrip("/")
+        self.s3_client, self.bucket, self.list_prefix = self._build_s3_client()
+
+        # GPIO/SPI wiring for ILI9341:
+        # - SPI port=0, device=0
+        # - DC pin: GPIO 24
+        # - RESET pin: GPIO 25
+        serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
+        self.device = ili9341(serial, rotate=1)
+        self.width, self.height = self.device.size
+
+        self.font = ImageFont.load_default()
+        self.choices: list[ImageChoice] = []
+        self.selected_index = -1
+        self.loading = False
+        self.is_printing = False
+        self.status_text = "Starting..."
+        self.last_error = ""
+        self.selected_preview: Image.Image | None = None
+        self.selected_preview_key: str | None = None
+
+        self.state_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.needs_redraw = True
+        self.last_draw_signature = ""
+        self.last_refresh_started = 0.0
+
+        self.set_status("Loading from S3...")
+        self.refresh_images()
+
+    def _build_s3_client(self):
+        region = (os.environ.get("VITE_AWS_REGION") or "").strip()
+        bucket = (os.environ.get("VITE_S3_BUCKET") or "").strip()
+        upload_prefix = normalize_prefix(os.environ.get("VITE_S3_UPLOAD_PREFIX", ""))
+        list_prefix = normalize_prefix(os.environ.get("VITE_S3_LIST_PREFIX", ""))
+        primary_prefix = upload_prefix or list_prefix
+
+        if not region:
+            raise RuntimeError("Missing VITE_AWS_REGION in env/.env")
+        if not bucket:
+            raise RuntimeError("Missing VITE_S3_BUCKET in env/.env")
+
+        access_key = (os.environ.get("VITE_AWS_ACCESS_KEY_ID") or "").strip()
+        secret_key = (os.environ.get("VITE_AWS_SECRET_ACCESS_KEY") or "").strip()
+        session_token = (os.environ.get("VITE_AWS_SESSION_TOKEN") or "").strip()
+
+        if not access_key or not secret_key:
+            raise RuntimeError(
+                "Missing AWS credentials (VITE_AWS_ACCESS_KEY_ID / VITE_AWS_SECRET_ACCESS_KEY)"
+            )
+
+        kwargs = {
+            "region_name": region,
+            "aws_access_key_id": access_key,
+            "aws_secret_access_key": secret_key,
+        }
+        if session_token:
+            kwargs["aws_session_token"] = session_token
+        client = boto3.client("s3", **kwargs)
+        return client, bucket, primary_prefix
+
+    def set_status(self, message: str) -> None:
+        with self.state_lock:
+            self.status_text = message
+            self.needs_redraw = True
+
+    def refresh_images(self) -> None:
+        with self.state_lock:
+            if self.loading or self.is_printing:
+                return
+            self.loading = True
+            self.last_refresh_started = time.time()
+            self.status_text = "Loading from S3..."
+            self.needs_redraw = True
+        threading.Thread(target=self._refresh_worker, daemon=True).start()
+
+    def _refresh_worker(self) -> None:
+        try:
+            response = self.s3_client.list_objects_v2(
+                Bucket=self.bucket,
+                Prefix=self.list_prefix or "",
+                MaxKeys=1000,
+            )
+            items = []
+            for obj in response.get("Contents", []):
+                key = obj.get("Key") or ""
+                if not key or key.endswith("/"):
+                    continue
+                lower = key.lower()
+                if not lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                    continue
+                items.append((key, obj.get("LastModified")))
+
+            items.sort(key=lambda x: x[1] or 0, reverse=True)
+            items = items[:MAX_ITEMS]
+
+            choices = []
+            for key, _ in items:
+                url = self.s3_client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": key},
+                    ExpiresIn=3600,
+                )
+                choices.append(ImageChoice(key=key, url=url))
+            self._apply_choices(choices)
+        except Exception as exc:
+            with self.state_lock:
+                self.loading = False
+                self.last_error = str(exc)
+                self.status_text = f"Load failed: {exc}"
+                self.needs_redraw = True
+
+    def _apply_choices(self, choices: list[ImageChoice]) -> None:
+        with self.state_lock:
+            self.choices = choices
+            self.selected_index = 0 if choices else -1
+            self.selected_preview = None
+            self.selected_preview_key = None
+            self.loading = False
+            self.last_error = ""
+            if choices:
+                self.status_text = f"Loaded {len(choices)} image(s)"
+            else:
+                self.status_text = "No images found in S3 prefix"
+            self.needs_redraw = True
+        self._ensure_selected_preview()
+
+    def _ensure_selected_preview(self) -> None:
+        with self.state_lock:
+            if not (0 <= self.selected_index < len(self.choices)):
+                return
+            selected = self.choices[self.selected_index]
+            if self.selected_preview_key == selected.key and self.selected_preview is not None:
+                return
+            selected_url = selected.url
+            selected_key = selected.key
+        try:
+            resp = requests.get(selected_url, timeout=15)
+            resp.raise_for_status()
+            image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            image.thumbnail((120, 120), Image.Resampling.LANCZOS)
+            with self.state_lock:
+                self.selected_preview = image
+                self.selected_preview_key = selected_key
+                self.needs_redraw = True
+        except Exception:
+            with self.state_lock:
+                self.selected_preview = None
+                self.selected_preview_key = selected_key
+                self.needs_redraw = True
+
+    def print_selected(self) -> None:
+        with self.state_lock:
+            if self.loading or self.is_printing:
+                return
+            if not (0 <= self.selected_index < len(self.choices)):
+                return
+            self.is_printing = True
+            self.status_text = "Printing..."
+            self.needs_redraw = True
+        threading.Thread(target=self._print_worker, daemon=True).start()
+
+    def _print_worker(self) -> None:
+        with self.state_lock:
+            selected = self.choices[self.selected_index]
+        try:
+            fetch_resp = requests.post(
+                f"{self.server_base}/fetch-for-print",
+                json={"url": selected.url},
+                timeout=45,
+            )
+            fetch_resp.raise_for_status()
+            image_base64 = base64.b64encode(fetch_resp.content).decode("ascii")
+
+            print_resp = requests.post(
+                f"{self.server_base}/printimage",
+                json={"imageBase64": image_base64},
+                timeout=60,
+            )
+            print_resp.raise_for_status()
+            with self.state_lock:
+                self.is_printing = False
+                self.status_text = f"Printed: {print_resp.text.strip() or 'OK'}"
+                self.needs_redraw = True
+        except Exception as exc:
+            with self.state_lock:
+                self.is_printing = False
+                self.last_error = str(exc)
+                self.status_text = f"Print failed: {exc}"
+                self.needs_redraw = True
+
+    def next_item(self) -> None:
+        with self.state_lock:
+            if self.loading or self.is_printing or len(self.choices) <= 1:
+                return
+            self.selected_index = (self.selected_index + 1) % len(self.choices)
+            self.selected_preview = None
+            self.selected_preview_key = None
+            self.needs_redraw = True
+        self._ensure_selected_preview()
+
+    def prev_item(self) -> None:
+        with self.state_lock:
+            if self.loading or self.is_printing or len(self.choices) <= 1:
+                return
+            self.selected_index = (self.selected_index - 1) % len(self.choices)
+            self.selected_preview = None
+            self.selected_preview_key = None
+            self.needs_redraw = True
+        self._ensure_selected_preview()
+
+    def maybe_auto_refresh(self) -> None:
+        with self.state_lock:
+            can_refresh = not self.loading and not self.is_printing
+            elapsed = time.time() - self.last_refresh_started
+        if can_refresh and elapsed >= AUTO_REFRESH_SECONDS:
+            self.refresh_images()
+
+    def _draw_button(self, draw: ImageDraw.ImageDraw, bounds, label: str, active: bool) -> None:
+        fill = "#2a2a2a" if active else "#1a1a1a"
+        outline = "#6ec1ff" if active else "#555555"
+        draw.rectangle(bounds, fill=fill, outline=outline, width=2)
+        x0, y0, x1, y1 = bounds
+        tw = int(draw.textlength(label, font=self.font))
+        th = 10
+        draw.text((x0 + (x1 - x0 - tw) // 2, y0 + (y1 - y0 - th) // 2), label, fill="white", font=self.font)
+
+    def render(self) -> None:
+        with self.state_lock:
+            selected_label = "-"
+            total = len(self.choices)
+            index = self.selected_index
+            if 0 <= index < total:
+                selected_label = self.choices[index].key.split("/")[-1]
+
+            signature = "|".join(
+                [
+                    self.status_text,
+                    selected_label,
+                    str(total),
+                    str(index),
+                    str(self.loading),
+                    str(self.is_printing),
+                    str(bool(self.selected_preview)),
+                ]
+            )
+            should_draw = self.needs_redraw or (signature != self.last_draw_signature)
+            if not should_draw:
+                return
+            self.needs_redraw = False
+            self.last_draw_signature = signature
+            status_text = self.status_text
+            loading = self.loading
+            is_printing = self.is_printing
+            preview = self.selected_preview.copy() if self.selected_preview else None
+
+        img = Image.new("RGB", self.device.size, "#0d1b2a")
+        draw = ImageDraw.Draw(img)
+
+        draw.rectangle((0, 0, self.width - 1, 24), fill="#102a43")
+        draw.text((6, 7), "Pi Printer TFT UI (ILI9341)", fill="white", font=self.font)
+
+        draw.text((8, 34), f"Images: {total}", fill="#d9e2ec", font=self.font)
+        draw.text((100, 34), f"Selected: {index + 1 if index >= 0 else 0}", fill="#d9e2ec", font=self.font)
+        draw.text((220, 34), f"{self.width}x{self.height}", fill="#9fb3c8", font=self.font)
+
+        draw.rectangle((8, 52, self.width - 8, 145), outline="#486581", width=1)
+        if preview:
+            px = 12 + (120 - preview.width) // 2
+            py = 56 + (86 - preview.height) // 2
+            img.paste(preview, (px, py))
+            draw.text((140, 60), "Selected file:", fill="#d9e2ec", font=self.font)
+            draw.text((140, 74), selected_label[:24], fill="white", font=self.font)
+            if len(selected_label) > 24:
+                draw.text((140, 88), selected_label[24:48], fill="white", font=self.font)
+        else:
+            draw.text((14, 82), "No preview", fill="#bcccdc", font=self.font)
+            draw.text((140, 60), "Selected file:", fill="#d9e2ec", font=self.font)
+            draw.text((140, 74), selected_label[:24], fill="white", font=self.font)
+            if len(selected_label) > 24:
+                draw.text((140, 88), selected_label[24:48], fill="white", font=self.font)
+
+        draw.text((8, 152), "Status:", fill="#d9e2ec", font=self.font)
+        draw.text((8, 166), status_text[:46], fill="white", font=self.font)
+        if len(status_text) > 46:
+            draw.text((8, 180), status_text[46:92], fill="white", font=self.font)
+
+        self._draw_button(draw, (8, 205, 78, 236), "Prev", not loading and not is_printing)
+        self._draw_button(draw, (84, 205, 154, 236), "Next", not loading and not is_printing)
+        self._draw_button(draw, (160, 205, 235, 236), "Refresh", not loading and not is_printing)
+        self._draw_button(draw, (241, 205, 312, 236), "Print", not loading and not is_printing and index >= 0)
+
+        # TODO: XPT2046 touch hook:
+        # - Use T_CLK, T_CS, T_DIN, T_DO, T_IRQ to read touch
+        # - Map touch coordinates to the button rectangles above
+        # - Trigger prev_item()/next_item()/refresh_images()/print_selected()
+
+        self.device.display(img)
+
+    def run(self) -> None:
+        try:
+            while not self.stop_event.is_set():
+                self.maybe_auto_refresh()
+                self.render()
+                time.sleep(LOW_REFRESH_SECONDS)
+        except KeyboardInterrupt:
+            pass
+
+
+def main() -> None:
+    app = TFTPrintUI()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
