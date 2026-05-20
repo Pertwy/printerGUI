@@ -125,7 +125,7 @@ Note: **physical pin 22** is display **RESET (GPIO 25)** — not touch. Touch CS
 | T_CLK  | SPI clock | GPIO 11 |
 | T_DIN  | MOSI      | GPIO 10 |
 | T_DO   | MISO      | GPIO 9 |
-| T_CS   | Touch CS  | **GPIO 7** (header pin 26) — `export TFT_TOUCH_CS_GPIO=7` if auto-probe fails |
+| T_CS   | Touch CS  | **GPIO 7 / CE1** (header pin 26) — use `export TFT_TOUCH_SPI_DEVICE=1` (not GPIO bit-bang on 7) |
 | T_IRQ  | Touch IRQ | **GPIO 17** (pin 11); stuck LOW is ignored automatically |
 
 Environment (see also `pi_tft/xpt2046_touch.py` docstring):
@@ -153,13 +153,15 @@ Touches on the bottom **Prev / Next / Print** bars invoke the same actions as be
    export TFT_TOUCH_INVERT_Y=1
    ```
    Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
-4. If **`raw=(0,0)`** or **`z=0`** always with **T_CS on pin 26**:
+4. If **`GPIO busy`** on `TFT_TOUCH_CS_GPIO=7`: pin 26 is **hardware CE1** — do **not** bit-bang GPIO 7. Use:
    ```bash
-   export TFT_TOUCH_CS_GPIO=7
+   unset TFT_TOUCH_CS_GPIO
+   export TFT_TOUCH_SPI_DEVICE=1
    export TFT_TOUCH_IRQ_GPIO=17
+   export TFT_TOUCH_USE_IRQ=0
    TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
    ```
-   Auto-probe tries **GPIO 7** first, then 22, 27, 16, 5, then hardware CE1.
+   (`TFT_TOUCH_CS_GPIO=7` also works — it maps to CE1 automatically.)
 5. IRQ on **GPIO 17** is already the default; if IRQ is wrong but SPI works, polling is on by default (`TFT_TOUCH_POLL=1`).
 
 If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or adjust **`TFT_TOUCH_SPI_*`** per your schematic.

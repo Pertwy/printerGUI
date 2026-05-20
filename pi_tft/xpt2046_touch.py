@@ -33,8 +33,13 @@ from dataclasses import dataclass
 
 _spi_lock = threading.Lock()
 
-# Common T_CS BCM pins (physical pin 26 on many 2.4" boards = GPIO 7 / CE1).
-_AUTO_CS_GPIO_PINS = (7, 22, 27, 16, 5)
+# BCM pins that are hardware SPI chip-selects — use spidev CE, never GPIO.output().
+_HARDWARE_CE_BCM_TO_DEVICE: dict[int, int] = {
+    8: 0,  # CE0 — display CS (header pin 24 on your board)
+    7: 1,  # CE1 — touch T_CS (header pin 26)
+}
+# Software T_CS on a free GPIO (try if CE1 reads stay zero).
+_AUTO_CS_GPIO_PINS = (22, 27, 16, 5)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -114,10 +119,25 @@ class XPT2046:
         self._spi_port = port
 
     def _setup_cs_gpio(self, cs_gpio: int) -> None:
+        if cs_gpio in _HARDWARE_CE_BCM_TO_DEVICE:
+            raise RuntimeError(
+                f"BCM GPIO {cs_gpio} is hardware SPI CE{_HARDWARE_CE_BCM_TO_DEVICE[cs_gpio]} — "
+                f"do not use as TFT_TOUCH_CS_GPIO. Use TFT_TOUCH_SPI_DEVICE="
+                f"{_HARDWARE_CE_BCM_TO_DEVICE[cs_gpio]} instead."
+            )
         import RPi.GPIO as GPIO
 
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(cs_gpio, GPIO.OUT, initial=GPIO.HIGH)
+        try:
+            GPIO.setup(cs_gpio, GPIO.OUT, initial=GPIO.HIGH)
+        except Exception as exc:
+            if "busy" in str(exc).lower():
+                raise RuntimeError(
+                    f"GPIO {cs_gpio} is busy (often a hardware SPI CE pin). "
+                    f"If T_CS is on header pin 26, use: export TFT_TOUCH_SPI_DEVICE=1 "
+                    f"(and unset TFT_TOUCH_CS_GPIO)."
+                ) from exc
+            raise
 
     def _cs_select(self, selected: bool) -> None:
         if self._cs_gpio is None:
@@ -143,9 +163,12 @@ class XPT2046:
                 self._cs_select(False)
 
     def _read_adc12(self, cmd: int) -> int:
+        # Discard first conversion after CS assert (common XPT2046 requirement).
+        self._xfer([cmd, 0x00])
         raw = self._xfer([cmd, 0x00])
         value = ((raw[0] << 8) | raw[1]) >> 4
         if value <= 0 or value >= 4095:
+            self._xfer([cmd, 0x00, 0x00])
             raw3 = self._xfer([cmd, 0x00, 0x00])
             value = ((raw3[1] & 0x7F) << 5) | (raw3[2] >> 3)
         return value & 0xFFF
@@ -203,10 +226,37 @@ def _sample_touch(touch: XPT2046) -> tuple[int, int, int]:
     return rx, ry, z
 
 
-def _open_with_cs(cs_gpio: int | None, spi_device: int) -> XPT2046:
-    if cs_gpio is not None:
-        return XPT2046(cs_gpio=cs_gpio, spi_device=0)
+def _open_touch(bcm_cs: int | None, spi_device: int) -> XPT2046:
+    """
+    Open touch controller.
+    bcm_cs: BCM pin for T_CS, or None for default spi_device (hardware CE).
+    """
+    if bcm_cs is not None and bcm_cs in _HARDWARE_CE_BCM_TO_DEVICE:
+        dev = _HARDWARE_CE_BCM_TO_DEVICE[bcm_cs]
+        return XPT2046(cs_gpio=None, spi_device=dev)
+    if bcm_cs is not None:
+        return XPT2046(cs_gpio=bcm_cs, spi_device=0)
     return XPT2046(spi_device=spi_device)
+
+
+def _candidate_list(cs_env: str, auto_probe: bool, spi_device: int) -> list[tuple[str, int | None, int]]:
+    """(label, bcm_cs pin or None, spidev device when bcm_cs is None)."""
+    out: list[tuple[str, int | None, int]] = []
+    if cs_env:
+        bcm = int(cs_env, 0)
+        if bcm in _HARDWARE_CE_BCM_TO_DEVICE:
+            dev = _HARDWARE_CE_BCM_TO_DEVICE[bcm]
+            out.append((f"CE{dev} (BCM{bcm}, header pin 26 for touch)", bcm, dev))
+        else:
+            out.append((f"GPIO{bcm}", bcm, 0))
+        return out
+    if auto_probe:
+        out.append((f"CE1 (BCM7, T_CS pin 26)", 7, 1))
+        for pin in _AUTO_CS_GPIO_PINS:
+            out.append((f"GPIO{pin}", pin, 0))
+        return out
+    out.append((f"CE{spi_device}", None, spi_device))
+    return out
 
 
 def open_optional_xpt2046() -> XPT2046 | None:
@@ -218,21 +268,12 @@ def open_optional_xpt2046() -> XPT2046 | None:
     auto_probe = _env_bool("TFT_TOUCH_AUTO_PROBE", True)
     spi_device = _env_int("TFT_TOUCH_SPI_DEVICE", 1)
 
-    candidates: list[tuple[str, int | None, int]] = []
-    if cs_env:
-        candidates.append((f"GPIO{cs_env}", int(cs_env), 0))
-    elif auto_probe:
-        # Prefer software CS on GPIO 7 (header pin 26 / CE1) before hardware CE1 only.
-        for pin in _AUTO_CS_GPIO_PINS:
-            candidates.append((f"GPIO{pin}", pin, 0))
-        candidates.append((f"CE{spi_device}", None, spi_device))
-    else:
-        candidates.append((f"CE{spi_device}", None, spi_device))
+    candidates = _candidate_list(cs_env, auto_probe, spi_device)
 
     last_exc: Exception | None = None
-    for label, cs_gpio, device in candidates:
+    for label, bcm_cs, device in candidates:
         try:
-            touch = _open_with_cs(cs_gpio, device)
+            touch = _open_touch(bcm_cs, device)
             rx, ry, z = _sample_touch(touch)
             if _valid_raw(rx, ry, z):
                 if label != candidates[0][0]:
@@ -244,13 +285,25 @@ def open_optional_xpt2046() -> XPT2046 | None:
             continue
 
     if cs_env:
+        bcm = int(cs_env, 0)
+        hint = (
+            "For T_CS on header pin 26 use hardware CE1:\n"
+            "  unset TFT_TOUCH_CS_GPIO\n"
+            "  export TFT_TOUCH_SPI_DEVICE=1"
+        )
+        if bcm in _HARDWARE_CE_BCM_TO_DEVICE:
+            hint = (
+                "T_CS on BCM GPIO 7 (pin 26) uses hardware SPI CE1 — use:\n"
+                "  export TFT_TOUCH_SPI_DEVICE=1\n"
+                "  unset TFT_TOUCH_CS_GPIO   # or keep TFT_TOUCH_CS_GPIO=7 (maps to CE1)"
+            )
         raise RuntimeError(
-            f"TFT_TOUCH_CS_GPIO={cs_env} set but no valid touch reads. Check wiring and SPI."
+            f"Touch setup failed for TFT_TOUCH_CS_GPIO={cs_env}. {hint}"
         ) from last_exc
 
-    touch = _open_with_cs(None, spi_device)
+    touch = _open_touch(None, spi_device)
     print(
-        "Warning: touch SPI still reads (0,0). For T_CS on header pin 26 use: export TFT_TOUCH_CS_GPIO=7",
+        "Warning: touch SPI still reads (0,0). T_CS on pin 26 → export TFT_TOUCH_SPI_DEVICE=1",
         file=sys.stderr,
     )
     return touch
