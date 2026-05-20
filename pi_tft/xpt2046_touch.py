@@ -31,7 +31,9 @@ import threading
 import time
 from dataclasses import dataclass
 
-_spi_lock = threading.Lock()
+# Shared with display updates in print_page_tft.py (same SPI0 bus).
+spi_bus_lock = threading.Lock()
+_spi_lock = spi_bus_lock
 
 # BCM pins that are hardware SPI chip-selects — use spidev CE, never GPIO.output().
 _HARDWARE_CE_BCM_TO_DEVICE: dict[int, int] = {
@@ -88,7 +90,8 @@ class XPT2046:
         self._cs_gpio = cs_gpio
         port = _env_int("TFT_TOUCH_SPI_PORT", 0) if spi_port is None else spi_port
         device = _env_int("TFT_TOUCH_SPI_DEVICE", 1) if spi_device is None else spi_device
-        hz = _env_int("TFT_TOUCH_SPI_MAX_HZ", 1_000_000) if max_speed_hz is None else max_speed_hz
+        hz = _env_int("TFT_TOUCH_SPI_MAX_HZ", 500_000) if max_speed_hz is None else max_speed_hz
+        spi_mode = _env_int("TFT_TOUCH_SPI_MODE", 0)
 
         self._spi: spidev.SpiDev = spidev.SpiDev()
         if cs_gpio is not None:
@@ -102,8 +105,8 @@ class XPT2046:
             self._spi_device = device
             self._cs_label = f"CE{device}"
 
-        self._spi.max_speed_hz = max(500_000, hz)
-        self._spi.mode = 0
+        self._spi.max_speed_hz = max(100_000, min(hz, 2_000_000))
+        self._spi.mode = spi_mode & 3
 
         self.xmin = _env_int("TFT_TOUCH_XMIN", 200)
         self.xmax = _env_int("TFT_TOUCH_XMAX", 3900)
@@ -154,37 +157,82 @@ class XPT2046:
         except Exception:
             pass
 
-    def _xfer(self, data: list[int]) -> list[int]:
-        with _spi_lock:
+    def _spi_transaction(self, data: list[int]) -> list[int]:
+        """One CS assertion for the whole transfer (required for hardware CE1)."""
+        with spi_bus_lock:
             self._cs_select(True)
             try:
                 return self._spi.xfer2(data)
             finally:
                 self._cs_select(False)
 
-    def _read_adc12(self, cmd: int) -> int:
-        # Discard first conversion after CS assert (common XPT2046 requirement).
-        self._xfer([cmd, 0x00])
-        raw = self._xfer([cmd, 0x00])
-        value = ((raw[0] << 8) | raw[1]) >> 4
-        if value <= 0 or value >= 4095:
-            self._xfer([cmd, 0x00, 0x00])
-            raw3 = self._xfer([cmd, 0x00, 0x00])
-            value = ((raw3[1] & 0x7F) << 5) | (raw3[2] >> 3)
-        return value & 0xFFF
+    @staticmethod
+    def _decode_adc12(raw: list[int], offset: int) -> int:
+        """Try common XPT2046 byte layouts from a multi-byte SPI reply."""
+        if offset + 2 >= len(raw):
+            return 0
+        candidates = [
+            ((raw[offset] << 8) | raw[offset + 1]) >> 4,
+            ((raw[offset + 1] & 0x7F) << 5) | (raw[offset + 2] >> 3) if offset + 2 < len(raw) else 0,
+            ((raw[offset] << 8) | raw[offset + 1]) >> 3,
+        ]
+        for value in candidates:
+            value &= 0xFFF
+            if 50 < value < 4080:
+                return value
+        return candidates[0] & 0xFFF
+
+    def _read_axes_once(self) -> tuple[int, int, int, list[int]]:
+        """
+        Read Y, X, Z in one SPI transaction (one CS window).
+        Returns (rx, ry, z, raw_bytes).
+        """
+        raw = self._spi_transaction(
+            [
+                self._CMD_Y,
+                0x00,
+                0x00,
+                self._CMD_X,
+                0x00,
+                0x00,
+                self._CMD_Z,
+                0x00,
+                0x00,
+            ]
+        )
+        ry = self._decode_adc12(raw, 1)
+        rx = self._decode_adc12(raw, 4)
+        z = self._decode_adc12(raw, 7)
+        if not _valid_raw(rx, ry, z):
+            vals = []
+            for i in range(max(0, len(raw) - 2)):
+                v = self._decode_adc12(raw, i)
+                if 80 < v < 4080:
+                    vals.append(v)
+            if len(vals) >= 2:
+                vals.sort()
+                ry, rx = vals[-2], vals[-1]
+            elif len(vals) == 1:
+                ry = vals[0]
+        if self.debug and not _valid_raw(rx, ry, z):
+            print(f"touch raw bytes: {[hex(b) for b in raw]}", file=sys.stderr)
+        return rx, ry, z, raw
 
     def read_pressure(self) -> int:
-        return self._read_adc12(self._CMD_Z)
+        _, _, z, _ = self._read_axes_once()
+        return z
 
     def read_raw(self) -> tuple[int, int]:
-        samples_x: list[int] = []
-        samples_y: list[int] = []
+        xs: list[int] = []
+        ys: list[int] = []
         for _ in range(3):
-            samples_x.append(self._read_adc12(self._CMD_X))
-            samples_y.append(self._read_adc12(self._CMD_Y))
-        samples_x.sort()
-        samples_y.sort()
-        return samples_x[len(samples_x) // 2], samples_y[len(samples_y) // 2]
+            rx, ry, _, _ = self._read_axes_once()
+            xs.append(rx)
+            ys.append(ry)
+            time.sleep(0.001)
+        xs.sort()
+        ys.sort()
+        return xs[len(xs) // 2], ys[len(ys) // 2]
 
     def is_finger_down(self) -> bool:
         z = self.read_pressure()
@@ -272,17 +320,21 @@ def open_optional_xpt2046() -> XPT2046 | None:
 
     last_exc: Exception | None = None
     for label, bcm_cs, device in candidates:
-        try:
-            touch = _open_touch(bcm_cs, device)
-            rx, ry, z = _sample_touch(touch)
-            if _valid_raw(rx, ry, z):
-                if label != candidates[0][0]:
-                    print(f"Touch: using {label} (raw=({rx},{ry}) z={z})", file=sys.stderr)
-                return touch
-            touch.close()
-        except Exception as exc:
-            last_exc = exc
-            continue
+        for spi_mode in (0, 3):
+            try:
+                touch = _open_touch(bcm_cs, device)
+                touch._spi.mode = spi_mode
+                rx, ry, z = _sample_touch(touch)
+                if _valid_raw(rx, ry, z):
+                    print(
+                        f"Touch: using {label} SPI mode {spi_mode} (raw=({rx},{ry}) z={z})",
+                        file=sys.stderr,
+                    )
+                    return touch
+                touch.close()
+            except Exception as exc:
+                last_exc = exc
+                continue
 
     if cs_env:
         bcm = int(cs_env, 0)
@@ -389,23 +441,31 @@ def _diag_loop() -> None:
             )
             touch.irq_enabled = False
 
-    print("Touch diagnostic — press the screen (Ctrl+C to quit)", file=sys.stderr)
+    always = _env_bool("TFT_TOUCH_DIAG_ALWAYS", True)
+    print(
+        "Touch diagnostic — press screen / buttons (Ctrl+C to quit). "
+        "Shows every sample while TFT_TOUCH_DIAG_ALWAYS=1.",
+        file=sys.stderr,
+    )
     try:
         while True:
-            rx, ry = touch.read_raw()
-            z = touch.read_pressure()
+            rx, ry, z, raw = touch._read_axes_once()
             irq = (
                 irq_is_pressed(irq_pin, touched_when_low)
                 if irq_pin is not None and touch.irq_enabled
                 else False
             )
             poll = _valid_raw(rx, ry, z)
-            if poll or irq:
+            if always or poll or irq or touch.debug:
                 pt = touch.read_pixel(320, 240)
                 px = pt.x if pt else -1
                 py = pt.y if pt else -1
-                print(f"irq={irq} spi={poll} raw=({rx},{ry}) z={z} pixel=({px},{py})", file=sys.stderr)
-            time.sleep(0.08)
+                print(
+                    f"irq={irq} spi={poll} raw=({rx},{ry}) z={z} "
+                    f"pixel=({px},{py}) bytes={len(raw)}",
+                    file=sys.stderr,
+                )
+            time.sleep(0.12)
     except KeyboardInterrupt:
         pass
     finally:

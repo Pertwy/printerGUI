@@ -210,6 +210,17 @@ class TFTPrintUI:
         if self._touch is None:
             return
         self._touch.log_config()
+        try:
+            rx, ry, z = xt._sample_touch(self._touch)
+            print(f"Touch startup sample: raw=({rx},{ry}) z={z}", file=sys.stderr)
+            if not xt._valid_raw(rx, ry, z):
+                print(
+                    "Touch: no SPI response yet — while pressing screen run: "
+                    "TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py",
+                    file=sys.stderr,
+                )
+        except Exception:
+            pass
         self._touch_thread = threading.Thread(target=self._touch_loop, name="xpt2046-touch", daemon=True)
         self._touch_thread.start()
 
@@ -494,7 +505,15 @@ class TFTPrintUI:
         ):
             self._draw_button(draw, bounds, label.capitalize(), active)
 
-        self.device.display(img)
+        try:
+            from xpt2046_touch import spi_bus_lock
+        except ImportError:
+            spi_bus_lock = None
+        if spi_bus_lock is not None:
+            with spi_bus_lock:
+                self.device.display(img)
+        else:
+            self.device.display(img)
 
     def run(self) -> None:
         try:
