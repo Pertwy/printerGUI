@@ -91,6 +91,15 @@ class TFTPrintUI:
                     "or inside venv:\n"
                     "  pip install rpi-lgpio"
                 ) from exc
+            if exc.name == "spidev":
+                raise SystemExit(
+                    "Missing SPI Python module (spidev) for luma.lcd.\n"
+                    "Inside your venv run:\n"
+                    "  pip install spidev\n"
+                    "or reinstall deps:\n"
+                    "  pip install -r pi_tkinter/requirements.txt\n"
+                    "Also ensure SPI is enabled (sudo raspi-config → Interface Options → SPI)."
+                ) from exc
             raise
         self.device = ili9341(serial, rotate=1)
         self.width, self.height = self.device.size

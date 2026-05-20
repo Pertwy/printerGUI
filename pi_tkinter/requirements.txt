@@ -3,3 +3,4 @@ Pillow
 requests
 luma.lcd
 rpi-lgpio; platform_system == "Linux" and (platform_machine == "armv7l" or platform_machine == "aarch64")
+spidev; platform_system == "Linux" and (platform_machine == "armv7l" or platform_machine == "aarch64")

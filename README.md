@@ -46,11 +46,14 @@ If you want a small direct-rendered UI on a 320x240 SPI screen, use the TFT app:
 
 1. Keep using your React app on your computer for uploads (`Upload` page).
 2. On the Pi, run the Node print server (`npm run server`).
-3. Install Python deps once:
+3. On the Pi, install system packages needed to build `lgpio` and `spidev` (GPIO + SPI for `luma.lcd` on Bookworm/Trixie):
+   - `sudo apt install -y liblgpio-dev swig build-essential python3-dev`
+   - Enable SPI: `sudo raspi-config` → Interface Options → SPI → Yes (or ensure `/dev/spidev0.0` exists)
+4. Install Python deps once:
    - `python3 -m venv .venv`
    - `source .venv/bin/activate`
    - `pip install -r pi_tkinter/requirements.txt`
-4. Run:
+5. Run:
    - `python3 pi_tft/print_page_tft.py`
 
 This UI draws directly to the ILI9341 with PIL + `luma.lcd`, not framebuffer (`/dev/fb1`) and not `fbcp-ili9341`.
