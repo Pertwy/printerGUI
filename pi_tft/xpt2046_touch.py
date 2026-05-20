@@ -294,17 +294,125 @@ def _candidate_list(cs_env: str, auto_probe: bool, spi_device: int) -> list[tupl
         bcm = int(cs_env, 0)
         if bcm in _HARDWARE_CE_BCM_TO_DEVICE:
             dev = _HARDWARE_CE_BCM_TO_DEVICE[bcm]
-            out.append((f"CE{dev} (BCM{bcm}, header pin 26 for touch)", bcm, dev))
+            out.append((f"CE{dev} (BCM{bcm})", bcm, dev))
         else:
             out.append((f"GPIO{bcm}", bcm, 0))
         return out
     if auto_probe:
-        out.append((f"CE1 (BCM7, T_CS pin 26)", 7, 1))
+        # CE0 first: many 2.4" boards wire touch CS to the same line as LCD CS (pin 24).
+        out.append(("CE0 (shared with display CS, pin 24)", None, 0))
+        out.append(("CE1 (BCM7, header pin 26)", 7, 1))
         for pin in _AUTO_CS_GPIO_PINS:
             out.append((f"GPIO{pin}", pin, 0))
         return out
     out.append((f"CE{spi_device}", None, spi_device))
     return out
+
+
+def _raw_has_signal(raw: list[int]) -> bool:
+    return any(b != 0 for b in raw)
+
+
+def _probe_config(
+    label: str,
+    bcm_cs: int | None,
+    device: int,
+    *,
+    verbose: bool,
+) -> tuple[int, XPT2046 | None, str]:
+    """
+    Try one CS wiring. Returns (score, touch instance or None, detail line).
+    score > 0 means some SPI response; higher is better.
+    """
+    best_score = 0
+    best_touch: XPT2046 | None = None
+    best_detail = ""
+    for spi_mode in (0, 3):
+        holder: XPT2046 | None = None
+        try:
+            holder = _open_touch(bcm_cs, device)
+            holder._spi.mode = spi_mode
+            for _ in range(6):
+                rx, ry, z, raw = holder._read_axes_once()
+                score = sum(1 for b in raw if b != 0)
+                if _valid_raw(rx, ry, z):
+                    score += 100
+                if score > best_score:
+                    best_score = score
+                    if best_touch is not None and best_touch is not holder:
+                        best_touch.close()
+                    best_touch = holder
+                    best_detail = (
+                        f"{label} mode={spi_mode} raw={[hex(b) for b in raw]} "
+                        f"parsed=({rx},{ry}) z={z}"
+                    )
+                time.sleep(0.02)
+            if holder is not None and holder is not best_touch:
+                holder.close()
+        except Exception as exc:
+            if verbose:
+                print(f"  {label} mode={spi_mode}: ERROR {exc}", file=sys.stderr)
+            if holder is not None and holder is not best_touch:
+                try:
+                    holder.close()
+                except Exception:
+                    pass
+    if verbose:
+        status = "OK" if best_score > 0 else "no SPI data (all 0x00)"
+        print(f"  {label}: {status}" + (f" — {best_detail}" if best_detail else ""), file=sys.stderr)
+    return best_score, best_touch, best_detail
+
+
+def scan_touch_bus(*, verbose: bool | None = None) -> tuple[XPT2046 | None, str]:
+    """
+    Try CE0, CE1, and GPIO chip-selects; return the best working config.
+    Press the screen during the first few seconds for best results.
+    """
+    if verbose is None:
+        verbose = _env_bool("TFT_TOUCH_SCAN", True)
+
+    cs_env = (os.environ.get("TFT_TOUCH_CS_GPIO") or "").strip()
+    auto_probe = _env_bool("TFT_TOUCH_AUTO_PROBE", True)
+    spi_device = _env_int("TFT_TOUCH_SPI_DEVICE", 1)
+    candidates = _candidate_list(cs_env, auto_probe, spi_device)
+
+    if verbose:
+        print(
+            "Touch bus scan — lightly press the screen now (3s)...",
+            file=sys.stderr,
+        )
+
+    winner: XPT2046 | None = None
+    winner_label = ""
+    winner_score = 0
+    winner_detail = ""
+
+    for label, bcm_cs, device in candidates:
+        score, touch, detail = _probe_config(label, bcm_cs, device, verbose=verbose)
+        if score > winner_score and touch is not None:
+            if winner is not None:
+                winner.close()
+            winner = touch
+            winner_label = label
+            winner_score = score
+            winner_detail = detail
+        elif touch is not None:
+            touch.close()
+
+    if winner is not None:
+        print(f"Touch: selected {winner_label} — {winner_detail}", file=sys.stderr)
+        return winner, winner_label
+
+    if verbose:
+        print(
+            "\nTouch scan: every config returned 0x00 on MISO. Checklist:\n"
+            "  1) In /boot/firmware/config.txt avoid 'dtoverlay=spi0-1cs' (needs 2 CE lines).\n"
+            "  2) Many boards tie T_CS to LCD CS (pin 24) not pin 26 — CE0 should then work.\n"
+            "  3) Confirm MISO (GPIO 9) is connected on the module flex.\n"
+            "  4) Run scan while pressing: TFT_TOUCH_SCAN=1 python3 pi_tft/xpt2046_touch.py\n",
+            file=sys.stderr,
+        )
+    return None, ""
 
 
 def open_optional_xpt2046() -> XPT2046 | None:
@@ -313,49 +421,23 @@ def open_optional_xpt2046() -> XPT2046 | None:
         return None
 
     cs_env = (os.environ.get("TFT_TOUCH_CS_GPIO") or "").strip()
-    auto_probe = _env_bool("TFT_TOUCH_AUTO_PROBE", True)
     spi_device = _env_int("TFT_TOUCH_SPI_DEVICE", 1)
 
-    candidates = _candidate_list(cs_env, auto_probe, spi_device)
-
-    last_exc: Exception | None = None
-    for label, bcm_cs, device in candidates:
-        for spi_mode in (0, 3):
-            try:
-                touch = _open_touch(bcm_cs, device)
-                touch._spi.mode = spi_mode
-                rx, ry, z = _sample_touch(touch)
-                if _valid_raw(rx, ry, z):
-                    print(
-                        f"Touch: using {label} SPI mode {spi_mode} (raw=({rx},{ry}) z={z})",
-                        file=sys.stderr,
-                    )
-                    return touch
-                touch.close()
-            except Exception as exc:
-                last_exc = exc
-                continue
+    touch, _label = scan_touch_bus(verbose=_env_bool("TFT_TOUCH_SCAN", True))
+    if touch is not None:
+        return touch
 
     if cs_env:
-        bcm = int(cs_env, 0)
-        hint = (
-            "For T_CS on header pin 26 use hardware CE1:\n"
-            "  unset TFT_TOUCH_CS_GPIO\n"
-            "  export TFT_TOUCH_SPI_DEVICE=1"
-        )
-        if bcm in _HARDWARE_CE_BCM_TO_DEVICE:
-            hint = (
-                "T_CS on BCM GPIO 7 (pin 26) uses hardware SPI CE1 — use:\n"
-                "  export TFT_TOUCH_SPI_DEVICE=1\n"
-                "  unset TFT_TOUCH_CS_GPIO   # or keep TFT_TOUCH_CS_GPIO=7 (maps to CE1)"
-            )
         raise RuntimeError(
-            f"Touch setup failed for TFT_TOUCH_CS_GPIO={cs_env}. {hint}"
-        ) from last_exc
+            f"TFT_TOUCH_CS_GPIO={cs_env} — no SPI response on any tested CS line. "
+            "See scan checklist printed above."
+        )
 
+    # Last resort: open requested device so diagnostics can still run.
     touch = _open_touch(None, spi_device)
     print(
-        "Warning: touch SPI still reads (0,0). T_CS on pin 26 → export TFT_TOUCH_SPI_DEVICE=1",
+        f"Warning: touch not detected; using CE{spi_device} anyway (expect raw=0). "
+        "Try: export TFT_TOUCH_SPI_DEVICE=0 for shared LCD/T_CS wiring.",
         file=sys.stderr,
     )
     return touch
@@ -425,7 +507,10 @@ def _diag_loop() -> None:
     except ImportError:
         pass
 
-    touch = open_optional_xpt2046()
+    print("=== Touch bus scan ===", file=sys.stderr)
+    touch, _ = scan_touch_bus(verbose=True)
+    if touch is None:
+        touch = open_optional_xpt2046()
     if touch is None:
         raise SystemExit("Touch disabled (TFT_TOUCH_ENABLE=0)")
     touch.log_config()

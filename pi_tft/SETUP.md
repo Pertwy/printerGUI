@@ -153,7 +153,12 @@ Touches on the bottom **Prev / Next / Print** bars invoke the same actions as be
    export TFT_TOUCH_INVERT_Y=1
    ```
    Tune **`TFT_TOUCH_XMIN`/`XMAX`/`YMIN`/`YMAX`** until bottom-bar taps show **y** near **196–240** (on a 240px-tall screen).
-4. If **`GPIO busy`** on `TFT_TOUCH_CS_GPIO=7`: pin 26 is **hardware CE1** — do **not** bit-bang GPIO 7. Use:
+4. If **`touch raw bytes: ['0x0', ...]`** (all zeros): the touch IC is not answering on that chip-select. Run:
+   ```bash
+   TFT_TOUCH_SCAN=1 TFT_TOUCH_DEBUG=1 python3 pi_tft/xpt2046_touch.py
+   ```
+   Press the screen during the scan. If **CE0** wins, T_CS is tied to **display CS (pin 24)** → `export TFT_TOUCH_SPI_DEVICE=0`. Check `/boot/firmware/config.txt` does **not** contain `dtoverlay=spi0-1cs`.
+5. If **`GPIO busy`** on `TFT_TOUCH_CS_GPIO=7`: pin 26 is **hardware CE1** — do **not** bit-bang GPIO 7. Use:
    ```bash
    unset TFT_TOUCH_CS_GPIO
    export TFT_TOUCH_SPI_DEVICE=1
