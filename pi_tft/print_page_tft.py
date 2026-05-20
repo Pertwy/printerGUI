@@ -26,11 +26,24 @@ def normalize_prefix(prefix: str) -> str:
     return trimmed if trimmed.endswith("/") else f"{trimmed}/"
 
 
-def load_env_file(path: str = ".env") -> None:
-    """Minimal .env loader so this script works without python-dotenv."""
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as handle:
+def load_env_file(path: str = ".env") -> str | None:
+    """Load .env from cwd/script/project-parent so the script works from pi_tft or project root."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.abspath(path),
+        os.path.abspath(os.path.join(script_dir, path)),
+        os.path.abspath(os.path.join(script_dir, "..", path)),
+    ]
+
+    env_path = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            env_path = candidate
+            break
+    if env_path is None:
+        return None
+
+    with open(env_path, "r", encoding="utf-8") as handle:
         for raw in handle:
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -40,6 +53,7 @@ def load_env_file(path: str = ".env") -> None:
             value = value.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = value
+    return env_path
 
 
 @dataclass
@@ -58,7 +72,7 @@ class TFTPrintUI:
     """
 
     def __init__(self) -> None:
-        load_env_file()
+        self.loaded_env_path = load_env_file()
         self.server_base = (os.environ.get("PRINTER_API_BASE") or "http://localhost:3000").rstrip("/")
         self.s3_client, self.bucket, self.list_prefix = self._build_s3_client()
 
@@ -97,9 +111,13 @@ class TFTPrintUI:
         primary_prefix = upload_prefix or list_prefix
 
         if not region:
-            raise RuntimeError("Missing VITE_AWS_REGION in env/.env")
+            raise RuntimeError(
+                f"Missing VITE_AWS_REGION. Looked for .env near script and cwd. Loaded: {self.loaded_env_path or 'none'}"
+            )
         if not bucket:
-            raise RuntimeError("Missing VITE_S3_BUCKET in env/.env")
+            raise RuntimeError(
+                f"Missing VITE_S3_BUCKET. Looked for .env near script and cwd. Loaded: {self.loaded_env_path or 'none'}"
+            )
 
         access_key = (os.environ.get("VITE_AWS_ACCESS_KEY_ID") or "").strip()
         secret_key = (os.environ.get("VITE_AWS_SECRET_ACCESS_KEY") or "").strip()
