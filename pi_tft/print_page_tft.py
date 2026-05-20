@@ -4,9 +4,15 @@ from __future__ import annotations
 import base64
 import io
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
+
+# Allow `import xpt2046_touch` when cwd is project root (not `pi_tft/`).
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 import boto3
 import requests
@@ -20,6 +26,31 @@ AUTO_REFRESH_SECONDS = 30.0
 # Bottom bar for Prev / Next / Print. Image uses full width × (height - bar).
 BUTTON_BAR_HEIGHT = 44
 IMAGE_BG = "#000000"
+
+
+def button_bar_layout(width: int, height: int) -> tuple[int, int, int, list[tuple[str, tuple[int, int, int, int]]]]:
+    """
+    Return (bar_top, margin, button_height, [(name, (x0,y0,x1,y1)), ...])
+    in the same pixel space as `render()` / touch mapping.
+    """
+    m = 3
+    bar_top = height - BUTTON_BAR_HEIGHT
+    btn_h = BUTTON_BAR_HEIGHT - 2 * m
+    y0 = bar_top + m
+    inner_w = width - 2 * m
+    btn_w = inner_w // 3
+    x0 = m
+    x1 = x0 + btn_w - 1
+    regions: list[tuple[str, tuple[int, int, int, int]]] = [
+        ("prev", (x0, y0, x1, y0 + btn_h - 1)),
+    ]
+    x0 = x1 + 1
+    x1 = x0 + btn_w - 1
+    regions.append(("next", (x0, y0, x1, y0 + btn_h - 1)))
+    x0 = x1 + 1
+    x1 = width - m - 1
+    regions.append(("print", (x0, y0, x1, y0 + btn_h - 1)))
+    return bar_top, m, btn_h, regions
 
 
 def normalize_prefix(prefix: str) -> str:
@@ -123,8 +154,12 @@ class TFTPrintUI:
         self.last_draw_signature = ""
         self.last_refresh_started = 0.0
 
+        self._touch = None
+        self._touch_thread: threading.Thread | None = None
+
         self.set_status("Loading from S3...")
         self.refresh_images()
+        self._maybe_start_touch()
 
     def _build_s3_client(self):
         region = (os.environ.get("VITE_AWS_REGION") or "").strip()
@@ -160,6 +195,74 @@ class TFTPrintUI:
             kwargs["aws_session_token"] = session_token
         client = boto3.client("s3", **kwargs)
         return client, bucket, primary_prefix
+
+    def _maybe_start_touch(self) -> None:
+        flag = (os.environ.get("TFT_TOUCH_ENABLE") or "1").strip().lower()
+        if flag in ("0", "false", "no", "off"):
+            return
+        try:
+            import xpt2046_touch as xt
+
+            self._touch = xt.open_optional_xpt2046()
+        except Exception as exc:
+            print(f"Warning: touch disabled ({exc}).", file=sys.stderr)
+            return
+        if self._touch is None:
+            return
+        self._touch_thread = threading.Thread(target=self._touch_loop, name="xpt2046-touch", daemon=True)
+        self._touch_thread.start()
+
+    def _touch_action_for_point(self, x: int, y: int) -> str | None:
+        _, _, _, regions = button_bar_layout(self.width, self.height)
+        for name, (x0, y0, x1, y1) in regions:
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return name
+        return None
+
+    def _dispatch_touch_action(self, action: str) -> None:
+        if action == "prev":
+            self.prev_item()
+        elif action == "next":
+            self.next_item()
+        elif action == "print":
+            self.print_selected()
+
+    def _touch_loop(self) -> None:
+        import xpt2046_touch as xt
+
+        touch = self._touch
+        if touch is None:
+            return
+        irq_pin: int | None = None
+        touched_when_low = True
+        try:
+            irq_pin, touched_when_low = xt.setup_irq_gpio()
+        except Exception as exc:
+            print(f"Warning: touch IRQ setup failed ({exc}).", file=sys.stderr)
+            return
+        try:
+            while not self.stop_event.is_set():
+                if not xt.irq_is_pressed(irq_pin, touched_when_low):
+                    time.sleep(0.02)
+                    continue
+                time.sleep(0.004)
+                if not xt.irq_is_pressed(irq_pin, touched_when_low):
+                    continue
+                pt = touch.read_pixel(self.width, self.height)
+                if pt is None:
+                    continue
+                action = self._touch_action_for_point(pt.x, pt.y)
+                if action is not None:
+                    self._dispatch_touch_action(action)
+                deadline = time.time() + 2.0
+                while xt.irq_is_pressed(irq_pin, touched_when_low) and not self.stop_event.is_set():
+                    if time.time() > deadline:
+                        break
+                    time.sleep(0.008)
+                time.sleep(0.14)
+        finally:
+            if irq_pin is not None:
+                xt.cleanup_irq_gpio(irq_pin)
 
     def set_status(self, message: str) -> None:
         with self.state_lock:
@@ -364,30 +467,14 @@ class TFTPrintUI:
             py = max(0, (image_area_h - preview.height) // 2)
             img.paste(preview, (px, py))
 
-        m = 3
-        bar_top = self.height - BUTTON_BAR_HEIGHT
-        btn_h = BUTTON_BAR_HEIGHT - 2 * m
-        y0 = bar_top + m
-        inner_w = self.width - 2 * m
-        btn_w = inner_w // 3
+        _, _, _, regions = button_bar_layout(self.width, self.height)
         can_prev_next = not loading and not is_printing and total > 1
         can_print = not loading and not is_printing and 0 <= index < total
-
-        x0 = m
-        x1 = x0 + btn_w - 1
-        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Prev", can_prev_next)
-        x0 = x1 + 1
-        x1 = x0 + btn_w - 1
-        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Next", can_prev_next)
-        x0 = x1 + 1
-        x1 = self.width - m - 1
-        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Print", can_print)
-
-        # TODO: XPT2046 touch hook:
-        # - Use T_CLK, T_CS, T_DIN, T_DO, T_IRQ to read touch
-        # - Map touch to the three bottom button rectangles (same layout as above)
-        # - Call prev_item(), next_item(), print_selected()
-        # - S3 list refresh remains on maybe_auto_refresh timer only (no on-screen Refresh)
+        for (label, bounds), active in zip(
+            regions,
+            [can_prev_next, can_prev_next, can_print],
+        ):
+            self._draw_button(draw, bounds, label.capitalize(), active)
 
         self.device.display(img)
 
@@ -399,6 +486,16 @@ class TFTPrintUI:
                 time.sleep(LOW_REFRESH_SECONDS)
         except KeyboardInterrupt:
             pass
+        finally:
+            self.stop_event.set()
+            if self._touch_thread is not None:
+                self._touch_thread.join(timeout=1.5)
+            touch = getattr(self, "_touch", None)
+            if touch is not None:
+                try:
+                    touch.close()
+                except Exception:
+                    pass
 
 
 def main() -> None:

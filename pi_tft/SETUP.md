@@ -19,7 +19,10 @@ Confirm the device exists:
 
 ```bash
 ls -l /dev/spidev0.0
+ls -l /dev/spidev0.1
 ```
+
+Touch uses **`/dev/spidev0.1`** by default (hardware **CE1**, GPIO 7). If `spidev0.1` is missing, enable both CE0 and CE1 (default Pi SPI overlay usually provides both).
 
 If missing after reboot, check **`/boot/firmware/config.txt`** (or **`/boot/config.txt`**) for `dtparam=spi=on`.
 
@@ -98,9 +101,32 @@ sudo systemctl enable --now print-server.service
 sudo systemctl enable --now tft-print-ui.service
 ```
 
-## 9. Touch (not implemented yet)
+## 9. XPT2046 touchscreen (optional)
 
-XPT2046 is left as **TODO** in `print_page_tft.py` (`T_CLK`, `T_CS`, `T_DIN`, `T_DO`, `T_IRQ`).
+The app reads touch on a **second SPI chip-select** (default **`spidev0.1`**, i.e. **CE1 / GPIO 7** for **T_CS**), and **T_IRQ** on a GPIO (default **BCM 17** — change if your board differs).
+
+Silkscreen → Pi (typical):
+
+| Module | Function | BCM / bus |
+|--------|-----------|-----------|
+| T_CLK  | SPI clock | GPIO 11 (SCLK) |
+| T_DIN  | MOSI      | GPIO 10 |
+| T_DO   | MISO      | GPIO 9 |
+| T_CS   | Touch CS  | **CE1 = GPIO 7** (for default `spidev0.1`) |
+| T_IRQ  | Touch IRQ | Set **`TFT_TOUCH_IRQ_GPIO`** to your wire (often 17 or 25 — **avoid GPIO 25 if it is display RST**) |
+
+Environment (see also `pi_tft/xpt2046_touch.py` docstring):
+
+- **`TFT_TOUCH_ENABLE`**: `1` (default) or `0` to disable touch.
+- **`TFT_TOUCH_SPI_PORT`** / **`TFT_TOUCH_SPI_DEVICE`**: default `0` / `1`.
+- **`TFT_TOUCH_IRQ_GPIO`**: BCM number for **T_IRQ** (default `17`).
+- **`TFT_TOUCH_IRQ_ACTIVE`**: `low` (default) or `high` when pressed.
+- **Calibration**: `TFT_TOUCH_XMIN`, `TFT_TOUCH_XMAX`, `TFT_TOUCH_YMIN`, `TFT_TOUCH_YMAX` (raw ADC, defaults ~200–3900).
+- **Orientation**: `TFT_TOUCH_SWAP_XY=1`, `TFT_TOUCH_INVERT_X=1`, `TFT_TOUCH_INVERT_Y=1` if pointer does not match buttons.
+
+Touches on the bottom **Prev / Next / Print** bars invoke the same actions as before. Taps on the image area are ignored.
+
+If touch is wrong or missing **`/dev/spidev0.1`**, wire **T_CS** to **CE1** or adjust **`TFT_TOUCH_SPI_*`** per your schematic.
 
 ## 10. Quick troubleshooting
 
@@ -113,5 +139,7 @@ XPT2046 is left as **TODO** in `print_page_tft.py` (`T_CLK`, `T_CS`, `T_DIN`, `T
 | `swig` errors | `sudo apt install -y swig` |
 | Blank / no display | SPI enabled; wiring; `port=0` / `device=0`; DC/RST GPIOs |
 | Print fails | `npm run server` running; `PRINTER_API_BASE`; firewall |
+| Touch misses buttons | Set **`TFT_TOUCH_IRQ_GPIO`**; tune **`TFT_TOUCH_*MIN/MAX`** and **`TFT_TOUCH_SWAP_XY`** / **`INVERT_*`** |
+| No `/dev/spidev0.1` | Wire **T_CS** to **CE1**; SPI enabled; check **`ls /dev/spidev*`** |
 
 For more context see the main **`README.md`** (ILI9341 TFT section).
