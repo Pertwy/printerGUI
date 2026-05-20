@@ -42,6 +42,8 @@ If you see `ModuleNotFoundError: No module named '_tkinter'`:
 
 ### Raspberry Pi ILI9341 TFT print page (SPI + luma.lcd)
 
+**Fresh Pi checklist (copy-paste order, troubleshooting):** see [`pi_tft/SETUP.md`](pi_tft/SETUP.md).
+
 If you want a small direct-rendered UI on a 320x240 SPI screen, use the TFT app:
 
 1. Keep using your React app on your computer for uploads (`Upload` page).

@@ -17,6 +17,9 @@ from PIL import Image, ImageDraw, ImageFont
 MAX_ITEMS = 200
 LOW_REFRESH_SECONDS = 0.2
 AUTO_REFRESH_SECONDS = 30.0
+# Bottom bar for Prev / Next / Print. Image uses full width × (height - bar).
+BUTTON_BAR_HEIGHT = 44
+IMAGE_BG = "#000000"
 
 
 def normalize_prefix(prefix: str) -> str:
@@ -237,7 +240,9 @@ class TFTPrintUI:
             resp = requests.get(selected_url, timeout=15)
             resp.raise_for_status()
             image = Image.open(io.BytesIO(resp.content)).convert("RGB")
-            image.thumbnail((120, 120), Image.Resampling.LANCZOS)
+            max_w = self.width
+            max_h = max(1, self.height - BUTTON_BAR_HEIGHT)
+            image.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
             with self.state_lock:
                 self.selected_preview = image
                 self.selected_preview_key = selected_key
@@ -326,21 +331,18 @@ class TFTPrintUI:
 
     def render(self) -> None:
         with self.state_lock:
-            selected_label = "-"
             total = len(self.choices)
             index = self.selected_index
-            if 0 <= index < total:
-                selected_label = self.choices[index].key.split("/")[-1]
 
             signature = "|".join(
                 [
-                    self.status_text,
-                    selected_label,
                     str(total),
                     str(index),
                     str(self.loading),
                     str(self.is_printing),
                     str(bool(self.selected_preview)),
+                    str(self.selected_preview.size if self.selected_preview else ""),
+                    str(self.selected_preview_key or ""),
                 ]
             )
             should_draw = self.needs_redraw or (signature != self.last_draw_signature)
@@ -348,51 +350,44 @@ class TFTPrintUI:
                 return
             self.needs_redraw = False
             self.last_draw_signature = signature
-            status_text = self.status_text
             loading = self.loading
             is_printing = self.is_printing
             preview = self.selected_preview.copy() if self.selected_preview else None
 
-        img = Image.new("RGB", self.device.size, "#0d1b2a")
+        image_area_h = max(1, self.height - BUTTON_BAR_HEIGHT)
+        img = Image.new("RGB", self.device.size, IMAGE_BG)
         draw = ImageDraw.Draw(img)
 
-        draw.rectangle((0, 0, self.width - 1, 24), fill="#102a43")
-        draw.text((6, 7), "Pi Printer TFT UI (ILI9341)", fill="white", font=self.font)
-
-        draw.text((8, 34), f"Images: {total}", fill="#d9e2ec", font=self.font)
-        draw.text((100, 34), f"Selected: {index + 1 if index >= 0 else 0}", fill="#d9e2ec", font=self.font)
-        draw.text((220, 34), f"{self.width}x{self.height}", fill="#9fb3c8", font=self.font)
-
-        draw.rectangle((8, 52, self.width - 8, 145), outline="#486581", width=1)
+        draw.rectangle((0, 0, self.width - 1, image_area_h - 1), fill=IMAGE_BG, outline=IMAGE_BG)
         if preview:
-            px = 12 + (120 - preview.width) // 2
-            py = 56 + (86 - preview.height) // 2
+            px = max(0, (self.width - preview.width) // 2)
+            py = max(0, (image_area_h - preview.height) // 2)
             img.paste(preview, (px, py))
-            draw.text((140, 60), "Selected file:", fill="#d9e2ec", font=self.font)
-            draw.text((140, 74), selected_label[:24], fill="white", font=self.font)
-            if len(selected_label) > 24:
-                draw.text((140, 88), selected_label[24:48], fill="white", font=self.font)
-        else:
-            draw.text((14, 82), "No preview", fill="#bcccdc", font=self.font)
-            draw.text((140, 60), "Selected file:", fill="#d9e2ec", font=self.font)
-            draw.text((140, 74), selected_label[:24], fill="white", font=self.font)
-            if len(selected_label) > 24:
-                draw.text((140, 88), selected_label[24:48], fill="white", font=self.font)
 
-        draw.text((8, 152), "Status:", fill="#d9e2ec", font=self.font)
-        draw.text((8, 166), status_text[:46], fill="white", font=self.font)
-        if len(status_text) > 46:
-            draw.text((8, 180), status_text[46:92], fill="white", font=self.font)
+        m = 3
+        bar_top = self.height - BUTTON_BAR_HEIGHT
+        btn_h = BUTTON_BAR_HEIGHT - 2 * m
+        y0 = bar_top + m
+        inner_w = self.width - 2 * m
+        btn_w = inner_w // 3
+        can_prev_next = not loading and not is_printing and total > 1
+        can_print = not loading and not is_printing and 0 <= index < total
 
-        self._draw_button(draw, (8, 205, 78, 236), "Prev", not loading and not is_printing)
-        self._draw_button(draw, (84, 205, 154, 236), "Next", not loading and not is_printing)
-        self._draw_button(draw, (160, 205, 235, 236), "Refresh", not loading and not is_printing)
-        self._draw_button(draw, (241, 205, 312, 236), "Print", not loading and not is_printing and index >= 0)
+        x0 = m
+        x1 = x0 + btn_w - 1
+        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Prev", can_prev_next)
+        x0 = x1 + 1
+        x1 = x0 + btn_w - 1
+        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Next", can_prev_next)
+        x0 = x1 + 1
+        x1 = self.width - m - 1
+        self._draw_button(draw, (x0, y0, x1, y0 + btn_h - 1), "Print", can_print)
 
         # TODO: XPT2046 touch hook:
         # - Use T_CLK, T_CS, T_DIN, T_DO, T_IRQ to read touch
-        # - Map touch coordinates to the button rectangles above
-        # - Trigger prev_item()/next_item()/refresh_images()/print_selected()
+        # - Map touch to the three bottom button rectangles (same layout as above)
+        # - Call prev_item(), next_item(), print_selected()
+        # - S3 list refresh remains on maybe_auto_refresh timer only (no on-screen Refresh)
 
         self.device.display(img)
 
