@@ -25,11 +25,21 @@ from luma.core.interface.serial import spi
 from luma.lcd.device import ili9341
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    from xpt2046_touch import XPT2046Touch
+except ImportError:  # allow running from the project root as well
+    from pi_tft.xpt2046_touch import XPT2046Touch
+
 MAX_ITEMS = 200
-LOW_REFRESH_SECONDS = 0.2
+# Main loop period. Kept short so touch polling stays responsive; render() is a
+# no-op when nothing changed, so a fast loop is cheap.
+LOW_REFRESH_SECONDS = 0.05
 AUTO_REFRESH_SECONDS = 30.0
-# TEMPORARY: auto-advance to next image (set to 0 to disable).
-AUTO_ADVANCE_SECONDS = 3.0
+# Auto-advance to next image (set to 0 to disable). Disabled now that touch
+# navigation is available, so taps don't fight an automatic slideshow.
+AUTO_ADVANCE_SECONDS = 0.0
+# Ignore taps that arrive within this window of the previous one (seconds).
+TOUCH_COOLDOWN_SECONDS = 0.4
 # Bottom bar for Prev / Next / Print. Image uses full width × (height - bar).
 BUTTON_BAR_HEIGHT = 44
 IMAGE_BG = "#000000"
@@ -144,6 +154,17 @@ class TFTPrintUI:
             raise
         self.device = ili9341(serial, rotate=1)
         self.width, self.height = self.device.size
+
+        # Optional XPT2046 resistive touch on SPI1 (/dev/spidev1.0). If it can't
+        # be initialised (not wired, SPI1 not enabled, missing deps), keep going
+        # in display-only mode so boot never breaks.
+        self.touch: XPT2046Touch | None = None
+        try:
+            self.touch = XPT2046Touch()
+        except Exception as exc:
+            print(f"[touch] disabled: {exc}")
+        self._touch_down = False
+        self._last_tap_at = 0.0
 
         self.font = ImageFont.load_default()
         self.choices: list[ImageChoice] = []
@@ -365,6 +386,44 @@ class TFTPrintUI:
             with self.state_lock:
                 self.last_advance_at = time.time()
 
+    def poll_touch(self) -> None:
+        """Read the touch panel and dispatch one action per tap (rising edge)."""
+        if self.touch is None:
+            return
+        try:
+            pos = self.touch.get_touch(self.width, self.height)
+        except Exception:
+            return
+
+        if pos is None:
+            self._touch_down = False
+            return
+
+        if self._touch_down:
+            return
+        self._touch_down = True
+
+        now = time.time()
+        if now - self._last_tap_at < TOUCH_COOLDOWN_SECONDS:
+            return
+        self._last_tap_at = now
+        self._dispatch_tap(pos)
+
+    def _dispatch_tap(self, pos: tuple[int, int]) -> None:
+        px, py = pos
+        _, _, _, regions = button_bar_layout(self.width, self.height)
+        for name, (x0, y0, x1, y1) in regions:
+            if x0 <= px <= x1 and y0 <= py <= y1:
+                if name == "prev":
+                    self.prev_item()
+                elif name == "next":
+                    self.next_item()
+                elif name == "print":
+                    self.print_selected()
+                with self.state_lock:
+                    self.last_advance_at = time.time()
+                return
+
     def maybe_auto_refresh(self) -> None:
         with self.state_lock:
             can_refresh = not self.loading and not self.is_printing
@@ -430,6 +489,7 @@ class TFTPrintUI:
     def run(self) -> None:
         try:
             while not self.stop_event.is_set():
+                self.poll_touch()
                 self.maybe_auto_refresh()
                 self.maybe_auto_advance()
                 self.render()
@@ -438,6 +498,8 @@ class TFTPrintUI:
             pass
         finally:
             self.stop_event.set()
+            if self.touch is not None:
+                self.touch.close()
 
 
 def main() -> None:
