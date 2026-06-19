@@ -39,6 +39,8 @@ ls -l /dev/spidev0.0 /dev/spidev1.0
 
 If you are not wiring the touch panel, you can skip this; the UI runs display-only.
 
+> **Note — backlight pin conflict:** `spi1-1cs` uses **GPIO 18** as SPI1 CE0, but that is also luma's *default* ILI9341 backlight pin. To avoid a `GPIO not allocated` error at display startup, the app moves the backlight pin to **GPIO 12** (override with the `TFT_BACKLIGHT_GPIO` env var). No wiring change is needed for boards whose backlight isn't GPIO-controlled.
+
 ## 3. System packages (build GPIO + SPI Python extensions)
 
 These are required so **`rpi-lgpio`** / **`lgpio`** and **`spidev`** can compile in a venv on modern Pi OS (e.g. Bookworm / Trixie):
@@ -168,6 +170,7 @@ Notes:
 | `swig` errors | `sudo apt install -y swig` |
 | Blank / no display | SPI enabled; wiring; `port=0` / `device=0`; DC/RST GPIOs |
 | Print fails | `npm run server` running; `PRINTER_API_BASE`; firewall |
+| `GPIO not allocated` (backlight) at display init | SPI1 CE0 (GPIO 18) clashes with luma's default backlight pin; app uses `TFT_BACKLIGHT_GPIO` (default 12) to avoid it — pull latest code |
 | `[touch] disabled` at startup | `dtoverlay=spi1-1cs` in config.txt; `/dev/spidev1.0` exists; touch wiring (section 9) |
 | Taps do nothing | Run `pi_tft/touch_calibrate.py`; check `T_CS`→pin 12 and `T_IRQ`→pin 37; lower `TOUCH_Z_THRESHOLD` |
 | Taps hit wrong button | Re-run calibration; verify `SWAP_XY`/`INVERT_*` in `pi_tft/touch_cal.json` |

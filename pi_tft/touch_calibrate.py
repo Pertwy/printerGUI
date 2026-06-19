@@ -14,6 +14,7 @@ pi_tft/touch_cal.json, and prints equivalent TOUCH_* env vars.
 """
 from __future__ import annotations
 
+import os
 import time
 
 from luma.core.interface.serial import spi
@@ -85,9 +86,10 @@ def _axis_range(s0: int, r0: int, s1: int, r1: int, s_max: int) -> tuple[int, in
 
 
 def main() -> None:
+    backlight_gpio = int(os.environ.get("TFT_BACKLIGHT_GPIO") or 12)
     try:
         serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
-        device = ili9341(serial, rotate=1)
+        device = ili9341(serial, rotate=1, gpio_LIGHT=backlight_gpio)
     except Exception as exc:
         raise SystemExit(
             f"Could not open the display: {exc}\n\n"

@@ -43,6 +43,10 @@ TOUCH_COOLDOWN_SECONDS = 0.4
 # Bottom bar for Prev / Next / Print. Image uses full width × (height - bar).
 BUTTON_BAR_HEIGHT = 44
 IMAGE_BG = "#000000"
+# luma's default ILI9341 backlight pin is BCM 18, which collides with SPI1 CE0
+# used by the touch overlay (spi1-1cs). Point it at a free pin so the display
+# still initialises; override with TFT_BACKLIGHT_GPIO if your board differs.
+BACKLIGHT_GPIO = int(os.environ.get("TFT_BACKLIGHT_GPIO") or 12)
 
 
 def button_bar_layout(width: int, height: int) -> tuple[int, int, int, list[tuple[str, tuple[int, int, int, int]]]]:
@@ -152,7 +156,7 @@ class TFTPrintUI:
                     "Also ensure SPI is enabled (sudo raspi-config → Interface Options → SPI)."
                 ) from exc
             raise
-        self.device = ili9341(serial, rotate=1)
+        self.device = ili9341(serial, rotate=1, gpio_LIGHT=BACKLIGHT_GPIO)
         self.width, self.height = self.device.size
 
         # Optional XPT2046 resistive touch on SPI1 (/dev/spidev1.0). If it can't
