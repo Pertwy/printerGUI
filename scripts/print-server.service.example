@@ -7,9 +7,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/john/Desktop/printerGUI
-User=john
-ExecStart=/home/john/.nvm/versions/node/v24.15.0/bin/node server.js
+WorkingDirectory=/home/johnpatrickperkins/Desktop/printerGUI
+User=johnpatrickperkins
+ExecStart=/home/johnpatrickperkins/.nvm/versions/node/v24.15.0/bin/node server.js
 Restart=on-failure
 RestartSec=5
 

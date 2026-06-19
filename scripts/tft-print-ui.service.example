@@ -10,9 +10,9 @@ Wants=print-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/john/Desktop/printerGUI
-User=john
-ExecStart=/home/john/Desktop/printerGUI/.venv/bin/python3 pi_tft/print_page_tft.py
+WorkingDirectory=/home/johnpatrickperkins/Desktop/printerGUI
+User=johnpatrickperkins
+ExecStart=/home/johnpatrickperkins/Desktop/printerGUI/.venv/bin/python3 pi_tft/print_page_tft.py
 Restart=on-failure
 RestartSec=5
 
