@@ -177,11 +177,10 @@ class XPT2046Touch:
         return z1 + (4095 - z2)
 
     def read_raw(self) -> tuple[int, int, int] | None:
-        """Return (raw_x, raw_y, pressure) when touched, else None."""
-        irq = self._irq_pressed()
-        if irq is False:
-            return None
+        """Return (raw_x, raw_y, pressure) when touched, else None.
 
+        Detection is pressure-based so it works whether or not T_IRQ is wired.
+        """
         pressure = self._pressure()
         if pressure < self.z_threshold:
             return None
@@ -191,6 +190,20 @@ class XPT2046Touch:
         if raw_x <= 0 or raw_y <= 0:
             return None
         return raw_x, raw_y, pressure
+
+    def debug_sample(self) -> dict:
+        """Raw readings for diagnostics (ignores the pressure gate)."""
+        z1 = self._read_adc(_CMD_Z1)
+        z2 = self._read_adc(_CMD_Z2)
+        return {
+            "z1": z1,
+            "z2": z2,
+            "pressure": z1 + (4095 - z2),
+            "x": self._read_channel(_CMD_X),
+            "y": self._read_channel(_CMD_Y),
+            "irq": self._irq_pressed(),
+            "threshold": self.z_threshold,
+        }
 
     def get_touch(self, width: int, height: int) -> tuple[int, int] | None:
         """Return (px, py) in the rotate=1 display space, or None if not touched."""
