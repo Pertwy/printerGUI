@@ -85,8 +85,18 @@ def _axis_range(s0: int, r0: int, s1: int, r1: int, s_max: int) -> tuple[int, in
 
 
 def main() -> None:
-    serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
-    device = ili9341(serial, rotate=1)
+    try:
+        serial = spi(port=0, device=0, gpio_DC=24, gpio_RST=25)
+        device = ili9341(serial, rotate=1)
+    except Exception as exc:
+        raise SystemExit(
+            f"Could not open the display: {exc}\n\n"
+            "This usually means the print UI is already running and holding the\n"
+            "screen's GPIO/SPI pins. Stop it first, then re-run calibration:\n"
+            "  sudo systemctl stop tft-print-ui.service\n"
+            "  python3 pi_tft/touch_calibrate.py\n"
+            "  sudo systemctl start tft-print-ui.service"
+        )
     width, height = device.size
     font = ImageFont.load_default()
 
