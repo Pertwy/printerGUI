@@ -18,6 +18,42 @@ app.use(express.json({ limit: "15mb" }));
 const device = new escpos.File("/dev/usb/lp0");
 const printer = new escpos.Printer(device);
 
+/**
+ * Thermal printers overheat / stall on large solid blacks.
+ * Threshold to B&W, then lighten black fills with a regular white-dot pattern
+ * (~75% black kept) so silhouettes stay clean but less dense.
+ */
+const BLACK_KEEP = 0.7;
+
+function shouldPunchWhite(x, y, keep) {
+  const cell = (x & 1) + ((y & 1) << 1);
+  if (keep >= 0.875) return false;
+  if (keep >= 0.625) return cell === 3;
+  if (keep >= 0.375) return (cell & 1) === 1;
+  return cell !== 0;
+}
+
+function prepareImageForThermal(jimpImage) {
+  const { width: w, height: h, data } = jimpImage.bitmap;
+
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = (y * w + x) * 4;
+      const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      let v = luma < 128 ? 0 : 255;
+      if (v === 0 && shouldPunchWhite(x, y, BLACK_KEEP)) {
+        v = 255;
+      }
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+  }
+
+  return jimpImage;
+}
+
 // ------------------------
 // 🧪 TEST
 // ------------------------
@@ -102,7 +138,9 @@ app.post("/printimage", async (req, res) => {
       jimpImage.rotate(90);
     }
 
-    processedPath = path.join(os.tmpdir(), `print-processed-${Date.now()}.jpg`);
+    prepareImageForThermal(jimpImage);
+
+    processedPath = path.join(os.tmpdir(), `print-processed-${Date.now()}.png`);
     await jimpImage.write(processedPath);
 
     await new Promise((resolve, reject) => {

@@ -1,7 +1,14 @@
 /**
- * Draw `img` scaled to w×h, convert to black/white and apply Floyd-Steinberg dithering.
- * `ditherPercent` controls error diffusion strength: 0 = threshold only, 100 = standard.
+ * Draw `img` scaled to w×h, convert to black/white.
+ * `ditherPercent` controls Floyd–Steinberg strength: 0 = hard threshold, 100 = full dither.
+ *
+ * After B&W conversion, solid black is lightened with a regular white-dot pattern so
+ * thermal printers are not asked to print large solid black fills.
  */
+
+/** Keep this fraction of black pixels in dark areas (0.7 ≈ 30% white dots). */
+const BLACK_KEEP = 0.7;
+
 export function drawDitheredBlackWhite(
   ctx: CanvasRenderingContext2D,
   img: CanvasImageSource,
@@ -38,14 +45,34 @@ export function drawDitheredBlackWhite(
     }
   }
 
-  for (let i = 0; i < d.length; i += 4) {
-    const p = i / 4;
-    const v = gray[p]! < 128 ? 0 : 255;
-    d[i] = v;
-    d[i + 1] = v;
-    d[i + 2] = v;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const p = y * w + x;
+      const i = p * 4;
+      let v = gray[p]! < 128 ? 0 : 255;
+      // Lighten solid black: punch white dots in a regular pattern.
+      if (v === 0 && shouldPunchWhite(x, y, BLACK_KEEP)) {
+        v = 255;
+      }
+      d[i] = v;
+      d[i + 1] = v;
+      d[i + 2] = v;
+    }
   }
   ctx.putImageData(imageData, 0, 0);
+}
+
+/**
+ * Deterministic pattern: keep ~BLACK_KEEP of black pixels.
+ * Uses a small repeating tile so silhouettes stay clean (not noisy).
+ */
+function shouldPunchWhite(x: number, y: number, keep: number): boolean {
+  // 2×2 tile densities: 1.0, 0.75, 0.5, 0.25
+  const cell = (x & 1) + ((y & 1) << 1); // 0..3
+  if (keep >= 0.875) return false;
+  if (keep >= 0.625) return cell === 3; // punch 1/4 → keep 75%
+  if (keep >= 0.375) return (cell & 1) === 1; // punch 2/4 → keep 50%
+  return cell !== 0; // punch 3/4 → keep 25%
 }
 
 export function getScaledSizeByMinSide(
