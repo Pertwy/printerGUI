@@ -2,12 +2,12 @@
  * Draw `img` scaled to w×h, convert to black/white.
  * `ditherPercent` controls Floyd–Steinberg strength: 0 = hard threshold, 100 = full dither.
  *
- * After B&W conversion, solid black is lightened with a regular white-dot pattern so
- * thermal printers are not asked to print large solid black fills.
+ * After B&W conversion, solid black is lightened with a regular white-dot pattern
+ * (upload-time only — printer server leaves the image as uploaded).
  */
 
-/** Keep this fraction of black pixels in dark areas (0.7 ≈ 30% white dots). */
-const BLACK_KEEP = 0.7;
+/** Keep this fraction of black pixels (0.35 ≈ checkerboard-ish; lower = lighter). */
+const BLACK_KEEP = 0.35;
 
 export function drawDitheredBlackWhite(
   ctx: CanvasRenderingContext2D,
