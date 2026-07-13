@@ -134,6 +134,24 @@
   width: 100%;
 }
 
+.upload-lighten-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--text-h);
+  font-size: 15px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.upload-lighten-toggle input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .upload-grid {
   display: flex;
   flex-direction: column;
@@ -144,7 +162,7 @@
 
 .upload-row {
   width: 100%;
-  max-width: 560px;
+  max-width: min(100%, 720px);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
@@ -153,16 +171,23 @@
 }
 
 .upload-row-preview {
-  display: flex;
-  justify-content: center;
   margin-bottom: 10px;
+  max-width: 100%;
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .upload-preview-canvas {
-  max-width: 100%;
+  /* Intrinsic print size set in JS (1 CSS px per print pixel). Do not shrink. */
+  max-width: none;
   height: auto;
-  border-radius: 8px;
   display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .upload-row-meta {

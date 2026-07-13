@@ -6,6 +6,9 @@ import {
 } from "../lib/grayscaleContrast";
 import { uploadJpegToS3 } from "../lib/s3";
 
+/** Min side of the print-ready bitmap (thermal width). Preview shows this 1:1. */
+const PRINT_MIN_SIDE = 384;
+
 type PendingImage = {
   id: string;
   file: File;
@@ -15,9 +18,11 @@ type PendingImage = {
 function PreviewCanvas({
   objectUrl,
   dither,
+  lightenBlacks,
 }: {
   objectUrl: string | null;
   dither: number;
+  lightenBlacks: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -34,18 +39,21 @@ function PreviewCanvas({
       const { w, h } = getScaledSizeByMinSide(
         img.naturalWidth,
         img.naturalHeight,
-        384
+        PRINT_MIN_SIDE
       );
       canvas.width = w;
       canvas.height = h;
-      drawDitheredBlackWhite(ctx, img, w, h, dither);
+      // CSS size = print bitmap size (1 device CSS px per pixel).
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      drawDitheredBlackWhite(ctx, img, w, h, dither, lightenBlacks);
     };
     img.src = objectUrl;
     return () => {
       cancelled = true;
       img.onload = null;
     };
-  }, [objectUrl, dither]);
+  }, [objectUrl, dither, lightenBlacks]);
 
   if (!objectUrl) return null;
   return <canvas ref={canvasRef} className="upload-preview-canvas" />;
@@ -54,16 +62,22 @@ function PreviewCanvas({
 function PendingRow({
   item,
   dither,
+  lightenBlacks,
   onRemove,
 }: {
   item: PendingImage;
   dither: number;
+  lightenBlacks: boolean;
   onRemove: () => void;
 }) {
   return (
     <div className="upload-row">
       <div className="upload-row-preview">
-        <PreviewCanvas objectUrl={item.url} dither={dither} />
+        <PreviewCanvas
+          objectUrl={item.url}
+          dither={dither}
+          lightenBlacks={lightenBlacks}
+        />
       </div>
       <div className="upload-row-meta">
         <span className="upload-row-name">{item.file.name}</span>
@@ -80,6 +94,7 @@ export default function UploadPage() {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const [dither, setDither] = useState(100);
+  const [lightenBlacks, setLightenBlacks] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -137,7 +152,12 @@ export default function UploadPage() {
       let ok = 0;
       for (const item of items) {
         // Keep saved output identical to the previewed print-ready bitmap size.
-        const canvas = await renderFileToCanvas(item.file, dither, 384);
+        const canvas = await renderFileToCanvas(
+          item.file,
+          dither,
+          PRINT_MIN_SIDE,
+          lightenBlacks
+        );
         const blob = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob(resolve, "image/jpeg", 0.92),
         );
@@ -216,6 +236,15 @@ export default function UploadPage() {
               onChange={(e) => setDither(Number(e.target.value))}
               className="upload-contrast-range"
             />
+            <label className="upload-lighten-toggle" htmlFor="upload-lighten">
+              <input
+                id="upload-lighten"
+                type="checkbox"
+                checked={lightenBlacks}
+                onChange={(e) => setLightenBlacks(e.target.checked)}
+              />
+              <span>Lighten solid blacks (if too dark for the printer)</span>
+            </label>
           </div>
 
           <div className="upload-grid">
@@ -224,6 +253,7 @@ export default function UploadPage() {
                 key={item.id}
                 item={item}
                 dither={dither}
+                lightenBlacks={lightenBlacks}
                 onRemove={() => removeItem(item.id)}
               />
             ))}

@@ -1,20 +1,43 @@
 /**
- * Draw `img` scaled to w×h, convert to black/white.
- * `ditherPercent` controls Floyd–Steinberg strength: 0 = hard threshold, 100 = full dither.
+ * Draw `img` scaled to w×h, convert to black/white and apply Floyd-Steinberg dithering.
+ * `ditherPercent` controls error diffusion strength: 0 = threshold only, 100 = standard.
  *
- * After B&W conversion, solid black is lightened with a regular white-dot pattern
- * (upload-time only — printer server leaves the image as uploaded).
+ * When `lightenBlacks` is true:
+ * 1) Near-solid blacks get spatial grain before dithering (so they break up like
+ *    naturally textured darks — e.g. the left vs right Muybridge horses).
+ * 2) Remaining solid black after dither is thinned with a regular white-dot pattern.
  */
 
-/** Keep this fraction of black pixels (0.35 ≈ checkerboard-ish; lower = lighter). */
-const BLACK_KEEP = 0.35;
+/** 8×8 Bayer matrix, values 0..63 — used to seed grain into flat blacks. */
+const BAYER8 = [
+  [0, 32, 8, 40, 2, 34, 10, 42],
+  [48, 16, 56, 24, 50, 18, 58, 26],
+  [12, 44, 4, 36, 14, 46, 6, 38],
+  [60, 28, 52, 20, 62, 30, 54, 22],
+  [3, 35, 11, 43, 1, 33, 9, 41],
+  [51, 19, 59, 27, 49, 17, 57, 25],
+  [15, 47, 7, 39, 13, 45, 5, 37],
+  [63, 31, 55, 23, 61, 29, 53, 21],
+] as const;
+
+/** Treat luma below this as "flat black" that needs grain before dithering. */
+const FLAT_BLACK_MAX = 48;
+/** After grain, flat blacks sit in this band so Floyd–Steinberg creates dots. */
+const GRAIN_LO = 72;
+const GRAIN_HI = 140;
+
+/** Base keep when lightening (0.5 = checkerboard). */
+const BLACK_KEEP_DEFAULT = 0.5;
+/** Stronger thinning when dither is at/above 100%. */
+const BLACK_KEEP_HIGH_DITHER = 0.35;
 
 export function drawDitheredBlackWhite(
   ctx: CanvasRenderingContext2D,
   img: CanvasImageSource,
   w: number,
   h: number,
-  ditherPercent: number
+  ditherPercent: number,
+  lightenBlacks = false
 ): void {
   ctx.drawImage(img, 0, 0, w, h);
   const imageData = ctx.getImageData(0, 0, w, h);
@@ -24,6 +47,19 @@ export function drawDitheredBlackWhite(
 
   for (let p = 0, i = 0; i < d.length; i += 4, p += 1) {
     gray[p] = 0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!;
+  }
+
+  // Flat solid blacks never dither (error stays ~0). Seed Bayer grain so they
+  // break up like naturally textured dark areas (left horse vs right horse).
+  if (lightenBlacks) {
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const p = y * w + x;
+        if (gray[p]! >= FLAT_BLACK_MAX) continue;
+        const t = (BAYER8[y & 7]![x & 7]! + 0.5) / 64;
+        gray[p] = GRAIN_LO + t * (GRAIN_HI - GRAIN_LO);
+      }
+    }
   }
 
   const strength = Math.max(0, ditherPercent) / 100;
@@ -45,13 +81,15 @@ export function drawDitheredBlackWhite(
     }
   }
 
+  const blackKeep =
+    ditherPercent >= 100 ? BLACK_KEEP_HIGH_DITHER : BLACK_KEEP_DEFAULT;
+
   for (let y = 0; y < h; y += 1) {
     for (let x = 0; x < w; x += 1) {
       const p = y * w + x;
       const i = p * 4;
       let v = gray[p]! < 128 ? 0 : 255;
-      // Lighten solid black: punch white dots in a regular pattern.
-      if (v === 0 && shouldPunchWhite(x, y, BLACK_KEEP)) {
+      if (lightenBlacks && v === 0 && shouldPunchWhite(x, y, blackKeep)) {
         v = 255;
       }
       d[i] = v;
@@ -63,7 +101,7 @@ export function drawDitheredBlackWhite(
 }
 
 /**
- * Deterministic pattern: keep ~BLACK_KEEP of black pixels.
+ * Deterministic pattern: keep ~keep of black pixels.
  * Uses a small repeating tile so silhouettes stay clean (not noisy).
  */
 function shouldPunchWhite(x: number, y: number, keep: number): boolean {
@@ -104,7 +142,8 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 export async function renderFileToCanvas(
   file: File,
   ditherPercent: number,
-  targetMinSide = 384
+  targetMinSide = 384,
+  lightenBlacks = false
 ): Promise<HTMLCanvasElement> {
   const url = URL.createObjectURL(file);
   try {
@@ -119,7 +158,7 @@ export async function renderFileToCanvas(
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas 2D context unavailable");
-    drawDitheredBlackWhite(ctx, img, w, h, ditherPercent);
+    drawDitheredBlackWhite(ctx, img, w, h, ditherPercent, lightenBlacks);
     return canvas;
   } finally {
     URL.revokeObjectURL(url);
